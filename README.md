@@ -259,9 +259,28 @@ agentgenome/
 - [Flash Linear Attention (fla)](https://github.com/fla-org/flash-linear-attention) — provides fast CUDA kernels for Qwen 3.5's 48 GatedDeltaNet layers (without fla, these fall back to naive sequential recurrence)
 - [causal-conv1d](https://github.com/Dao-AILab/causal-conv1d) — fast causal 1D convolution kernel used by GatedDeltaNet layers
 - [Flash Attention](https://github.com/Dao-AILab/flash-attention) — for the 16 standard attention layers
-- GPU: H200 SXM (141 GB VRAM) recommended. A100 80GB is the minimum for Qwen 3.5-27B in BFloat16 (~54 GB)
+- GPU: H200 SXM (141 GB VRAM) recommended. A100 80GB is the minimum for Qwen 3.5-27B in BFloat16 (~54 GB). See [VRAM budget](#vram-budget-for-parallel-sae-training) for details
 - Anthropic API key (for LLM judge evaluation and feature interpretation)
 - ~200GB disk for model weights + activations
+
+## VRAM Budget for Parallel SAE Training
+
+`03_train_saes.py` loads the model once and extracts activations at all 7 hook points per forward pass, then dispatches them to parallel SAE training workers via multiprocessing queues. On a single GPU, this requires everything to be resident simultaneously:
+
+| Component | VRAM | Details |
+|-----------|------|---------|
+| Qwen 3.5-27B weights | ~54 GB | 27B params × 2 bytes (BFloat16) |
+| 7 SAE models | ~5.6 GB | 7 × ~0.8 GB (encoder 5120→40960 + decoder 40960→5120 in BF16) |
+| 7 SAE optimizer states | ~23.5 GB | 7 × ~3.4 GB (Adam momentum + variance in FP32) |
+| 7 SAE gradients | ~5.6 GB | 7 × ~0.8 GB |
+| Forward pass workspace | ~10 GB | Batch of 16 × 2048 tokens through 64 layers (no grad) |
+| Activation cache | ~2.3 GB | 7 captured layers × 16 × 2048 × 5120 × 2 bytes |
+| CUDA/PyTorch overhead | ~5 GB | Allocator fragmentation, kernel state |
+| **Total** | **~106 GB** | |
+
+This exceeds the A100 80GB but fits within the H200 SXM's 141 GB, which is why H200 is the recommended single-GPU option.
+
+**Multi-GPU alternative**: With 2+ A100 80GB GPUs, the script places the model on `cuda:0` (~71 GB with forward pass overhead) and distributes SAE workers across `cuda:1`..`cuda:N-1`. This works but adds PCIe transfer overhead since activations must cross the GPU interconnect for every batch.
 
 ## Tests
 
