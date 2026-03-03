@@ -1,5 +1,5 @@
 #!/bin/bash
-# RunPod setup script for Qwen 3.5 Scope / AgentGenome
+# RunPod setup script for Qwen 3.5 Scope / QwenScope
 # Run this ONCE after creating the pod with network volume mounted at /workspace
 #
 # Recommended pod: H200 SXM (141 GB VRAM), 200 GB volume, ≥16 vCPUs, ≥128 GB RAM
@@ -26,7 +26,7 @@ echo "  Detected $NUM_GPUS GPU(s)"
 echo ""
 echo "[2/6] Running parallel setup..."
 VOLUME=/workspace
-ENV_FILE="/workspace/agentgenome/.env"
+ENV_FILE="/workspace/qwenscope/.env"
 
 # --- Background job 1: System dependencies (apt-get) ---
 (
@@ -37,7 +37,7 @@ PID_APT=$!
 
 # --- Background job 2: Python dependencies (pip) ---
 (
-    cd /workspace/agentgenome
+    cd /workspace/qwenscope
     pip install --upgrade pip setuptools wheel -q
     pip install -e ".[dev]" -q
     echo "  [pip] Python dependencies installed"
@@ -64,8 +64,8 @@ QWEN35_MODEL_PATH=Qwen/Qwen3.5-27B
 DEVICE=cuda
 PYTHONUNBUFFERED=1
 
-RESULTS_DIR=/workspace/agentgenome/data/results
-ACTIVATIONS_DIR=/workspace/agentgenome/data/activations
+RESULTS_DIR=/workspace/qwenscope/data/results
+ACTIVATIONS_DIR=/workspace/qwenscope/data/activations
 
 # --- Set these manually ---
 ANTHROPIC_API_KEY=sk-ant-REPLACE_ME
@@ -77,11 +77,11 @@ ENVEOF
         echo "  [env] .env already exists, skipping"
     fi
 
-    cat > /workspace/agentgenome/scripts/load_env.sh << 'LOADEOF'
+    cat > /workspace/qwenscope/scripts/load_env.sh << 'LOADEOF'
 #!/bin/bash
 # Source this to load env vars: source scripts/load_env.sh
 set -a
-source /workspace/agentgenome/.env
+source /workspace/qwenscope/.env
 set +a
 echo "Environment loaded."
 LOADEOF
@@ -116,7 +116,7 @@ pip install "git+https://github.com/fla-org/flash-linear-attention.git" -q
 pip install accelerate -q
 
 # Reinstall project deps (picks up new PyTorch)
-cd /workspace/agentgenome
+cd /workspace/qwenscope
 pip install -e ".[dev]" -q
 
 # ─── 4. HuggingFace login ────────────────────────────────────────────────────
@@ -178,8 +178,8 @@ print(f'  Pydantic: {pydantic.__version__}')
 "
 
 # Quick import test
-cd /workspace/agentgenome
-PYTHONPATH=/workspace/agentgenome python3 -c "
+cd /workspace/qwenscope
+PYTHONPATH=/workspace/qwenscope python3 -c "
 from src.model.config import Qwen35Config, HOOK_POINTS
 from src.sae.model import TopKSAE
 from src.steering.engine import SteeringEngine
@@ -189,8 +189,8 @@ print('  All project imports OK')
 # ─── 6. Run tests ────────────────────────────────────────────────────────────
 echo ""
 echo "[6/6] Running test suite..."
-cd /workspace/agentgenome
-PYTHONPATH=/workspace/agentgenome python3 -m pytest tests/ -v --tb=short
+cd /workspace/qwenscope
+PYTHONPATH=/workspace/qwenscope python3 -m pytest tests/ -v --tb=short
 
 ELAPSED=$(( SECONDS - SETUP_START ))
 echo ""
@@ -198,7 +198,7 @@ echo "=========================================="
 echo "  Setup complete! (${ELAPSED}s)"
 echo ""
 echo "  NEXT STEPS:"
-echo "  1. Edit /workspace/agentgenome/.env with your API keys"
+echo "  1. Edit /workspace/qwenscope/.env with your API keys"
 echo "  2. source scripts/load_env.sh"
 echo "  3. Start the pipeline: python3 scripts/01_setup_model.py"
 echo ""

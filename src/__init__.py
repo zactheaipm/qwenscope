@@ -1,4 +1,4 @@
-"""Qwen 3.5 Scope / AgentGenome — SAE-based behavioral decomposition."""
+"""Qwen 3.5 Scope / QwenScope — SAE-based behavioral decomposition."""
 
 import logging
 

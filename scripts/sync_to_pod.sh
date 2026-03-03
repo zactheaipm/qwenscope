@@ -26,7 +26,7 @@ echo "Ensuring rsync is installed on remote..."
 ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no "$SSH_HOST" \
     'command -v rsync >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq rsync > /dev/null 2>&1)' 2>/dev/null
 
-echo "Syncing $PROJECT_DIR → $SSH_HOST:/workspace/agentgenome (port $SSH_PORT)"
+echo "Syncing $PROJECT_DIR → $SSH_HOST:/workspace/qwenscope (port $SSH_PORT)"
 
 rsync -avz --progress \
     --exclude '.git' \
@@ -40,10 +40,10 @@ rsync -avz --progress \
     --exclude '.ruff_cache' \
     -e "ssh -p $SSH_PORT" \
     "$PROJECT_DIR/" \
-    "$SSH_HOST:/workspace/agentgenome/"
+    "$SSH_HOST:/workspace/qwenscope/"
 
 echo ""
 echo "Sync complete. Now SSH in and run:"
 echo "  ssh -p $SSH_PORT $SSH_HOST"
-echo "  cd /workspace/agentgenome"
+echo "  cd /workspace/qwenscope"
 echo "  bash scripts/runpod_setup.sh"

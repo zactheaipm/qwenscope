@@ -286,7 +286,7 @@ class CostTracker:
     # -- estimation ----------------------------------------------------------
 
     def estimate_full_pipeline_cost(self) -> PipelineCostSummary:
-        """Estimate costs for the full AgentGenome pipeline.
+        """Estimate costs for the full QwenScope pipeline.
 
         Uses project-specific constants derived from CLAUDE.md:
 

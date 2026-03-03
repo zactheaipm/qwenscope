@@ -1,14 +1,14 @@
-# AgentGenome
+# QwenScope
 
 **SAE-based behavioral decomposition and steering for Qwen 3.5-27B's hybrid GatedDeltaNet + Attention architecture.**
 
-AgentGenome trains [Sparse Autoencoders](https://transformer-circuits.pub/2023/monosemantic-features) (SAEs) on the residual stream of [Qwen 3.5-27B](https://huggingface.co/Qwen/Qwen3.5-27B) — a 64-layer hybrid model that interleaves GatedDeltaNet (linear attention) and standard attention layers — to identify, decompose, and steer five core behavioral traits of agentic language model behavior.
+QwenScope trains [Sparse Autoencoders](https://transformer-circuits.pub/2023/monosemantic-features) (SAEs) on the residual stream of [Qwen 3.5-27B](https://huggingface.co/Qwen/Qwen3.5-27B) — a 64-layer hybrid model that interleaves GatedDeltaNet (linear attention) and standard attention layers — to identify, decompose, and steer five core behavioral traits of agentic language model behavior.
 
 The central question: **How are behavioral traits encoded differently across DeltaNet vs. attention layers in a hybrid architecture?**
 
 ## Behavioral Traits
 
-AgentGenome decomposes agentic behavior into 5 traits, each with 3 measurable sub-behaviors (15 total):
+QwenScope decomposes agentic behavior into 5 traits, each with 3 measurable sub-behaviors (15 total):
 
 | Trait | Sub-behaviors | Description |
 |-------|--------------|-------------|
@@ -200,7 +200,7 @@ bash scripts/sync_to_pod.sh root@<POD_IP> <SSH_PORT>
 
 # SSH in and run setup (upgrades PyTorch, installs fla + flash-attn + causal-conv1d)
 ssh -p <SSH_PORT> root@<POD_IP>
-cd /workspace/agentgenome
+cd /workspace/qwenscope
 bash scripts/runpod_setup.sh
 ```
 
@@ -215,7 +215,7 @@ python scripts/run_pilot.py
 ## Project Structure
 
 ```
-agentgenome/
+qwenscope/
 ├── configs/
 │   ├── experiment.yaml          # Traits, domains, steering experiments
 │   ├── model.yaml               # Qwen 3.5-27B architecture parameters

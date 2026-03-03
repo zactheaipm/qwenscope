@@ -1,5 +1,5 @@
 [project]
-name = "qwen35-scope"
+name = "qwenscope"
 version = "0.1.0"
 description = "SAE-based behavioral decomposition for Qwen 3.5-27B hybrid architecture"
 requires-python = ">=3.11"
