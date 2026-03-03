@@ -1,0 +1,57 @@
+# ── Secrets & credentials ──────────────────────────────────────────────────────
+.env
+.env.*
+*.env
+
+# ── Python ─────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+build/
+dist/
+develop-eggs/
+*.egg-info/
+.eggs/
+MANIFEST
+
+# ── Virtual environments ────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+.conda/
+
+# ── Test & coverage ─────────────────────────────────────────────────────────────
+.pytest_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+
+# ── Intermediate activations (multi-GB, reproducible — not released) ────────────
+data/activations/
+
+# ── Synthetic data (distributed separately, regenerable via scripts) ───────────
+data/synthetic*/
+
+# ── Logs ────────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Jupyter ─────────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── Linter cache ──────────────────────────────────────────────────────────────
+.ruff_cache/
+
+# ── IDE / OS ────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

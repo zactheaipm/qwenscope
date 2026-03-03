@@ -1,0 +1,58 @@
+sae_type: "topk"
+dictionary_size: 40960      # 8× hidden_dim
+topk: 64
+learning_rate: 5.0e-5
+lr_warmup_steps: 1000
+batch_size: 4096
+training_tokens: 200_000_000
+checkpoint_every_tokens: 50_000_000
+seed: 42
+
+hook_points:
+  sae_delta_early:
+    layer: 10
+    type: "deltanet"
+    block: 2
+    position: 2
+  sae_attn_early:
+    layer: 11
+    type: "attention"
+    block: 2
+    position: 3
+  sae_delta_mid_pos1:
+    layer: 33
+    type: "deltanet"
+    block: 8
+    position: 1
+    description: "Control: position-in-block comparison"
+  sae_delta_mid:
+    layer: 34
+    type: "deltanet"
+    block: 8
+    position: 2
+  sae_attn_mid:
+    layer: 35
+    type: "attention"
+    block: 8
+    position: 3
+  sae_delta_late:
+    layer: 54
+    type: "deltanet"
+    block: 13
+    position: 2
+  sae_attn_late:
+    layer: 55
+    type: "attention"
+    block: 13
+    position: 3
+
+buffer_capacity: 500_000       # Shuffle window: 500K tokens (~5 GB BF16 on CPU)
+resample_every_n_steps: 5_000  # ~10 resampling events over 200M-token run
+
+training_data:
+  datasets:
+    - "HuggingFaceH4/ultrachat_200k"
+    - "allenai/WildChat-1M"     # GDPR-filtered version (allenai), NOT cognitivecomputations fork
+  include_tool_use: true
+  sequential_processing: true  # FAST methodology
+  max_seq_length: 2048

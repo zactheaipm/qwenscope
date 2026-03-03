@@ -1,0 +1,7 @@
+model_id: "Qwen/Qwen3.5-27B"
+hidden_dim: 5120
+num_layers: 64
+block_size: 4  # 3 DeltaNet + 1 Attention per block
+num_blocks: 16
+context_length: 4096  # Working context for experiments (not max)
+dtype: "bfloat16"

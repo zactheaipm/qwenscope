@@ -1,0 +1,66 @@
+traits:
+  - autonomy
+  - tool_use_eagerness
+  - persistence
+  - risk_calibration
+  - deference
+
+domains:
+  - coding
+  - research
+  - communication
+  - data
+
+contrastive_pairs_per_trait_per_domain: 40  # 40 × 4 domains = 160 per trait (10 templates × 4 variations)
+contrastive_templates_per_trait_per_domain: 10  # Effective independent observations
+num_evaluation_scenarios: 100  # Extended from 20 for statistical power
+
+# Sub-behavior contrastive pairs (isolated per sub-behavior)
+contrastive_sub_behavior_templates_per_domain: 3  # 3 templates × 4 variations = 12 pairs per sub-behavior per domain
+sub_behavior_pairs_per_sub_behavior: 48  # 3 templates × 4 variations × 4 domains
+sub_behavior_pairs_total: 720  # 15 sub-behaviors × 48 pairs each
+total_contrastive_pairs: 1520  # 800 composite + 720 sub-behavior
+
+feature_extraction:
+  pooling_strategy: last_token  # mean | max | last_n | last_token
+  # last_token avoids the sequence-length confound: different system prompt
+  # lengths between HIGH and LOW variants dilute decision-point signals
+  # unequally when using mean pooling.
+
+steering:
+  multipliers: [0.0, 2.0, 5.0, 10.0]
+  top_k_features: 20     # Number of top TAS features to steer
+
+  experiments:
+    standard:             # Experiment 1: best SAE per trait
+      enabled: true
+    layer_type:           # Experiment 2: DeltaNet vs attention
+      enabled: true
+      min_traits: 3       # Only run for top N traits by TAS
+    single_layer:         # Experiment 2b: each SAE independently
+      enabled: true
+    cross_depth:          # Experiment 3: early/mid/late
+      enabled: true
+      min_traits: 2       # Only run for top N traits
+
+  baselines:
+    random_features:
+      enabled: true
+      filter_dead: true   # Only sample from active features
+      n_seeds: 10          # Report distribution of baseline effects
+    mean_diff:
+      enabled: true       # Activation-addition baseline (no SAE)
+    generalization:
+      enabled: true       # Test with neutral system prompt
+      neutral_prompt: "You are a helpful assistant."
+    safety:
+      enabled: true       # Test steering vs RLHF safety constraints
+
+  baseline_correlations:
+    enabled: true
+    n_runs: 200           # Unsteered trajectories for trait correlations
+
+  bootstrap:
+    enabled: true
+    n_bootstrap: 1000
+    ci_level: 0.95
