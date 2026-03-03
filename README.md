@@ -136,6 +136,7 @@ The full pipeline is implemented as 10 numbered scripts, each writing a JSON man
 # Install dependencies (PyTorch 2.6+ required for fla compatibility)
 pip install "torch>=2.6" --index-url https://download.pytorch.org/whl/cu124
 pip install flash-attn --no-build-isolation
+pip install causal-conv1d --no-build-isolation
 pip install "git+https://github.com/fla-org/flash-linear-attention.git"
 pip install accelerate
 pip install -e ".[dev]"
@@ -163,7 +164,7 @@ python scripts/10_package_release.py
 To regenerate the synthetic tool-use training data:
 
 ```bash
-# Using Anthropic API
+# Using DeepSeek API
 python scripts/generate_synthetic_data.py --split both --n-train 10000 --n-eval 1000
 
 # Using a local vLLM server or any OpenAI-compatible endpoint
@@ -197,7 +198,7 @@ After creating the pod:
 # Sync code to pod
 bash scripts/sync_to_pod.sh root@<POD_IP> <SSH_PORT>
 
-# SSH in and run setup (upgrades PyTorch, installs fla + flash-attn)
+# SSH in and run setup (upgrades PyTorch, installs fla + flash-attn + causal-conv1d)
 ssh -p <SSH_PORT> root@<POD_IP>
 cd /workspace/agentgenome
 bash scripts/runpod_setup.sh
@@ -256,6 +257,7 @@ agentgenome/
 - Python ≥ 3.11
 - PyTorch ≥ 2.6 with CUDA 12.4
 - [Flash Linear Attention (fla)](https://github.com/fla-org/flash-linear-attention) — provides fast CUDA kernels for Qwen 3.5's 48 GatedDeltaNet layers (without fla, these fall back to naive sequential recurrence)
+- [causal-conv1d](https://github.com/Dao-AILab/causal-conv1d) — fast causal 1D convolution kernel used by GatedDeltaNet layers
 - [Flash Attention](https://github.com/Dao-AILab/flash-attention) — for the 16 standard attention layers
 - GPU: H200 SXM (141 GB VRAM) recommended. A100 80GB is the minimum for Qwen 3.5-27B in BFloat16 (~54 GB)
 - Anthropic API key (for LLM judge evaluation and feature interpretation)

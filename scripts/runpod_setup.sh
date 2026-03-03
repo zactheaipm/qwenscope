@@ -111,6 +111,7 @@ echo "[3/6] Upgrading PyTorch and installing fast kernels..."
 pip uninstall -y torch torchvision torchaudio triton -q 2>/dev/null || true
 pip install "torch>=2.6" "torchvision>=0.21" "torchaudio>=2.6" --index-url https://download.pytorch.org/whl/cu124 -q
 pip install flash-attn --no-build-isolation -q 2>/dev/null || echo "WARN: flash-attn install failed, will use eager attention"
+pip install causal-conv1d --no-build-isolation -q 2>/dev/null || echo "WARN: causal-conv1d install failed"
 pip install "git+https://github.com/fla-org/flash-linear-attention.git" -q
 pip install accelerate -q
 
@@ -154,6 +155,12 @@ try:
     print(f'  Flash Attention: {flash_attn.__version__}')
 except ImportError:
     print('  Flash Attention: NOT INSTALLED (will use eager)')
+
+try:
+    import causal_conv1d
+    print(f'  causal-conv1d: {causal_conv1d.__version__}')
+except ImportError:
+    print('  causal-conv1d: NOT INSTALLED')
 
 try:
     import fla
