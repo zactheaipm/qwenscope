@@ -51,7 +51,7 @@ def load_model(
 
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
-        torch_dtype=torch_dtype,
+        dtype=torch_dtype,
         device_map=device if device != "cpu" else None,
         attn_implementation=attn_implementation,
         trust_remote_code=True,

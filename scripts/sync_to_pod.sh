@@ -21,6 +21,11 @@ SSH_PORT="${2:-22}"
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Ensure rsync is available on the remote (RunPod images may not have it)
+echo "Ensuring rsync is installed on remote..."
+ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no "$SSH_HOST" \
+    'command -v rsync >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq rsync > /dev/null 2>&1)' 2>/dev/null
+
 echo "Syncing $PROJECT_DIR → $SSH_HOST:/workspace/agentgenome (port $SSH_PORT)"
 
 rsync -avz --progress \

@@ -133,15 +133,19 @@ The full pipeline is implemented as 10 numbered scripts, each writing a JSON man
 ### Running the Pipeline
 
 ```bash
-# Install dependencies
-pip install -e ".[dev,gpu]"
+# Install dependencies (PyTorch 2.6+ required for fla compatibility)
+pip install "torch>=2.6" --index-url https://download.pytorch.org/whl/cu124
+pip install flash-attn --no-build-isolation
+pip install "git+https://github.com/fla-org/flash-linear-attention.git"
+pip install accelerate
+pip install -e ".[dev]"
 
 # Set environment variables
 export ANTHROPIC_API_KEY="your-key"    # For LLM judge and feature interpretation
 export WANDB_API_KEY="your-key"        # For experiment tracking
 export HF_TOKEN="your-token"           # For model download
 
-# Run the full pipeline (requires A100 80GB or equivalent)
+# Run the full pipeline (requires H200 SXM or A100 80GB)
 python scripts/01_setup_model.py
 python scripts/02_extract_activations.py
 python scripts/03_train_saes.py
@@ -172,6 +176,31 @@ python scripts/generate_synthetic_data.py \
 
 # Clean and deduplicate generated data
 python scripts/clean_synthetic_data.py
+```
+
+### RunPod Setup
+
+The recommended RunPod configuration:
+
+| Setting | Value |
+|---------|-------|
+| GPU | NVIDIA H200 SXM (141 GB VRAM) |
+| Volume | 200 GB network volume |
+| Container Disk | 50 GB |
+| vCPUs | ≥ 16 |
+| RAM | ≥ 128 GB |
+| Docker Image | `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04` |
+
+After creating the pod:
+
+```bash
+# Sync code to pod
+bash scripts/sync_to_pod.sh root@<POD_IP> <SSH_PORT>
+
+# SSH in and run setup (upgrades PyTorch, installs fla + flash-attn)
+ssh -p <SSH_PORT> root@<POD_IP>
+cd /workspace/agentgenome
+bash scripts/runpod_setup.sh
 ```
 
 ### Running a Pilot
@@ -225,8 +254,10 @@ agentgenome/
 ## Requirements
 
 - Python ≥ 3.11
-- PyTorch ≥ 2.4
-- GPU: A100 80GB recommended (for Qwen 3.5-27B in BFloat16)
+- PyTorch ≥ 2.6 with CUDA 12.4
+- [Flash Linear Attention (fla)](https://github.com/fla-org/flash-linear-attention) — provides fast CUDA kernels for Qwen 3.5's 48 GatedDeltaNet layers (without fla, these fall back to naive sequential recurrence)
+- [Flash Attention](https://github.com/Dao-AILab/flash-attention) — for the 16 standard attention layers
+- GPU: H200 SXM (141 GB VRAM) recommended. A100 80GB is the minimum for Qwen 3.5-27B in BFloat16 (~54 GB)
 - Anthropic API key (for LLM judge evaluation and feature interpretation)
 - ~200GB disk for model weights + activations
 

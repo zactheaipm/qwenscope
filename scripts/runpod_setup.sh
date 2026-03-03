@@ -2,6 +2,9 @@
 # RunPod setup script for Qwen 3.5 Scope / AgentGenome
 # Run this ONCE after creating the pod with network volume mounted at /workspace
 #
+# Recommended pod: H200 SXM (141 GB VRAM), 200 GB volume, ≥16 vCPUs, ≥128 GB RAM
+# Docker image: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+#
 # Usage: bash scripts/runpod_setup.sh
 set -euo pipefail
 
@@ -10,9 +13,9 @@ SETUP_START=$SECONDS
 
 # ─── 1. Verify GPU ───────────────────────────────────────────────────────────
 echo ""
-echo "[1/5] Checking GPU..."
+echo "[1/6] Checking GPU..."
 if ! nvidia-smi &>/dev/null; then
-    echo "ERROR: No GPU detected. Make sure you selected an A100 80GB pod."
+    echo "ERROR: No GPU detected. Make sure you selected an H200 SXM pod."
     exit 1
 fi
 NUM_GPUS=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
@@ -21,13 +24,13 @@ echo "  Detected $NUM_GPUS GPU(s)"
 
 # ─── 2. Parallel setup: system deps + Python deps + dirs/env ─────────────────
 echo ""
-echo "[2/5] Running parallel setup..."
+echo "[2/6] Running parallel setup..."
 VOLUME=/workspace
 ENV_FILE="/workspace/agentgenome/.env"
 
 # --- Background job 1: System dependencies (apt-get) ---
 (
-    apt-get update -qq && apt-get install -y -qq git vim tmux htop > /dev/null 2>&1
+    apt-get update -qq && apt-get install -y -qq git vim tmux htop rsync > /dev/null 2>&1
     echo "  [apt] System dependencies installed"
 ) &
 PID_APT=$!
@@ -61,8 +64,8 @@ QWEN35_MODEL_PATH=Qwen/Qwen3.5-27B
 DEVICE=cuda
 PYTHONUNBUFFERED=1
 
-RESULTS_DIR=/workspace/data/results
-ACTIVATIONS_DIR=/workspace/data/activations
+RESULTS_DIR=/workspace/agentgenome/data/results
+ACTIVATIONS_DIR=/workspace/agentgenome/data/activations
 
 # --- Set these manually ---
 ANTHROPIC_API_KEY=sk-ant-REPLACE_ME
@@ -98,14 +101,41 @@ if [ $FAIL -ne 0 ]; then
 fi
 echo "Parallel setup complete."
 
-# ─── 3. Flash Attention (after pip finishes to avoid lock contention) ─────────
+# ─── 3. Upgrade PyTorch + install fast kernels for Qwen 3.5 ──────────────────
+# Qwen 3.5-27B has 48 GatedDeltaNet layers + 16 attention layers.
+# fla (Flash Linear Attention) provides optimized CUDA kernels for DeltaNet;
+# without it the model falls back to a naive sequential recurrence (~5× slower).
+# fla requires PyTorch ≥ 2.6 and Triton ≥ 3.2.
 echo ""
-echo "[3/5] Installing flash-attn (pre-built wheel)..."
-pip install flash-attn -q 2>/dev/null || echo "WARN: flash-attn install failed, will use eager attention"
+echo "[3/6] Upgrading PyTorch and installing fast kernels..."
+pip uninstall -y torch torchvision torchaudio triton -q 2>/dev/null || true
+pip install "torch>=2.6" "torchvision>=0.21" "torchaudio>=2.6" --index-url https://download.pytorch.org/whl/cu124 -q
+pip install flash-attn --no-build-isolation -q 2>/dev/null || echo "WARN: flash-attn install failed, will use eager attention"
+pip install "git+https://github.com/fla-org/flash-linear-attention.git" -q
+pip install accelerate -q
 
-# ─── 4. Verify installation ──────────────────────────────────────────────────
+# Reinstall project deps (picks up new PyTorch)
+cd /workspace/agentgenome
+pip install -e ".[dev]" -q
+
+# ─── 4. HuggingFace login ────────────────────────────────────────────────────
 echo ""
-echo "[4/5] Verifying installation..."
+echo "[4/6] Logging in to HuggingFace..."
+if [ -f "$ENV_FILE" ]; then
+    HF_TOKEN_VAL=$(grep "^HF_TOKEN=" "$ENV_FILE" | cut -d= -f2)
+    if [ "$HF_TOKEN_VAL" != "REPLACE_ME" ] && [ -n "$HF_TOKEN_VAL" ]; then
+        python3 -c "from huggingface_hub import login; login(token='$HF_TOKEN_VAL')"
+        echo "  HuggingFace login OK"
+    else
+        echo "  SKIP: Set HF_TOKEN in .env first"
+    fi
+else
+    echo "  SKIP: No .env file found"
+fi
+
+# ─── 5. Verify installation ──────────────────────────────────────────────────
+echo ""
+echo "[5/6] Verifying installation..."
 python3 -c "
 import torch
 print(f'  PyTorch: {torch.__version__}')
@@ -115,6 +145,23 @@ print(f'  GPUs: {n_gpus}')
 for i in range(n_gpus):
     props = torch.cuda.get_device_properties(i)
     print(f'    [{i}] {props.name} — {props.total_memory / 1e9:.1f} GB')
+
+import triton
+print(f'  Triton: {triton.__version__}')
+
+try:
+    import flash_attn
+    print(f'  Flash Attention: {flash_attn.__version__}')
+except ImportError:
+    print('  Flash Attention: NOT INSTALLED (will use eager)')
+
+try:
+    import fla
+    from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+    print(f'  FLA (Flash Linear Attention): installed — GatedDeltaRule kernels available')
+except ImportError:
+    print('  FLA: NOT INSTALLED (DeltaNet layers will use naive recurrence)')
+
 import transformers
 print(f'  Transformers: {transformers.__version__}')
 import safetensors
@@ -124,17 +171,19 @@ print(f'  Pydantic: {pydantic.__version__}')
 "
 
 # Quick import test
-python3 -c "
+cd /workspace/agentgenome
+PYTHONPATH=/workspace/agentgenome python3 -c "
 from src.model.config import Qwen35Config, HOOK_POINTS
 from src.sae.model import TopKSAE
 from src.steering.engine import SteeringEngine
 print('  All project imports OK')
 "
 
-# ─── 5. Run tests ────────────────────────────────────────────────────────────
+# ─── 6. Run tests ────────────────────────────────────────────────────────────
 echo ""
-echo "[5/5] Running test suite..."
-python3 -m pytest tests/ -v --tb=short
+echo "[6/6] Running test suite..."
+cd /workspace/agentgenome
+PYTHONPATH=/workspace/agentgenome python3 -m pytest tests/ -v --tb=short
 
 ELAPSED=$(( SECONDS - SETUP_START ))
 echo ""
@@ -144,9 +193,7 @@ echo ""
 echo "  NEXT STEPS:"
 echo "  1. Edit /workspace/agentgenome/.env with your API keys"
 echo "  2. source scripts/load_env.sh"
-echo "  3. Log in to HuggingFace: huggingface-cli login"
-echo "  4. Start the pilot: python3 scripts/run_pilot.py"
-echo "     Or full pipeline: python3 scripts/01_setup_model.py"
+echo "  3. Start the pipeline: python3 scripts/01_setup_model.py"
 echo ""
 if [ "$NUM_GPUS" -gt 1 ]; then
     echo "  MULTI-GPU DETECTED ($NUM_GPUS GPUs):"
