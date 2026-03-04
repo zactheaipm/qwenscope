@@ -575,7 +575,7 @@ class SAETrainer:
         latents = self.sae.encoder(x_centered)        # (batch, dict_size)
 
         # Among dead features only, take top-k (same k as main SAE)
-        dead_indices = dead_mask.nonzero(as_tuple=True)[0]  # (n_dead,)
+        dead_indices = dead_mask.nonzero(as_tuple=True)[0].to(x_centered.device)  # (n_dead,)
         dead_latents = latents[:, dead_indices]              # (batch, n_dead)
 
         k_aux = min(self.sae.k, n_dead)
