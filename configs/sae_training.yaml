@@ -19,6 +19,16 @@ hook_points:
     type: "attention"
     block: 2
     position: 3
+  sae_delta_earlymid:
+    layer: 22
+    type: "deltanet"
+    block: 5
+    position: 2
+  sae_attn_earlymid:
+    layer: 23
+    type: "attention"
+    block: 5
+    position: 3
   sae_delta_mid_pos1:
     layer: 33
     type: "deltanet"

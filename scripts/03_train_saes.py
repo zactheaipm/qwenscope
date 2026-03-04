@@ -1,19 +1,24 @@
 """Parallel SAE training across multiple GPUs.
 
-Loads the model ONCE and extracts activations at all 7 hook points per forward
+Loads the model ONCE and extracts activations at all hook points per forward
 pass, then distributes to parallel SAE training workers via multiprocessing queues.
+
+When all SAEs don't fit in VRAM simultaneously, use --max-parallel to train in
+sequential batches (e.g., 3+3+1 for 7 SAEs on a single H200). The model is
+loaded once and reused across all batches.
 
 Speedup sources:
   1. Single model load instead of 7 sequential loads (~5 min saved per load)
-  2. One forward pass captures all 7 layers (vs. 7 separate full forward passes)
-  3. SAE training runs concurrently across available GPUs
+  2. One forward pass captures all active layers (vs. separate full forward passes)
+  3. SAE training runs concurrently within each batch
 
 Architecture:
   Main process (producer):  Model on GPU 0 → forward pass → activations to queues
   Worker processes (consumers): Each trains one SAE from its queue on assigned GPU
 
 Usage:
-    python scripts/03_train_saes.py                       # All 7 SAEs, auto-detect GPUs
+    python scripts/03_train_saes.py                       # All 7 SAEs, batched by default
+    python scripts/03_train_saes.py --max-parallel 3      # Train in batches of 3 (3+3+1)
     python scripts/03_train_saes.py --n-gpus 4            # Limit to 4 GPUs
     python scripts/03_train_saes.py --sae-ids sae_attn_mid sae_delta_mid  # Subset
 """
@@ -168,18 +173,22 @@ def sae_worker(
 
 
 def run_producer(
+    model: torch.nn.Module,
+    tokenizer,
     model_device: str,
     queues: dict[int, MPQueue],
     layers: list[int],
     training_tokens: int,
     error_event: MPEvent,
 ) -> None:
-    """Load model and produce activations for all target layers simultaneously.
+    """Produce activations for target layers using a pre-loaded model.
 
     Registers hooks on all target layers, runs forward passes on training data,
     and dispatches masked+flattened activations to per-layer queues.
 
     Args:
+        model: Pre-loaded Qwen 3.5 model.
+        tokenizer: Model tokenizer.
         model_device: Device for the model (e.g. "cuda:0").
         queues: Map from layer index to its output queue.
         layers: Layer indices to capture.
@@ -188,12 +197,7 @@ def run_producer(
     """
     from src.data.training_data import SAETrainingDataBuilder
     from src.model.hooks import ActivationCache
-    from src.model.loader import load_model
     from src.sae.config import SAETrainingConfig
-
-    logger.info("Producer: loading model on %s...", model_device)
-    model, tokenizer = load_model(dtype="bfloat16", device=model_device)
-    logger.info("Producer: model loaded.")
 
     # Build training data — use first SAE's config for data parameters
     config = SAETrainingConfig.from_yaml(
@@ -298,6 +302,115 @@ def assign_devices(
     return model_device, sae_devices
 
 
+def train_batch(
+    batch_hps: list,
+    model: torch.nn.Module,
+    tokenizer,
+    model_device: str,
+    n_gpus: int,
+    config_path: str,
+    output_dir: str,
+    training_tokens: int,
+    batch_idx: int,
+    total_batches: int,
+) -> list[str]:
+    """Train a batch of SAEs concurrently, sharing the pre-loaded model.
+
+    Args:
+        batch_hps: Hook points for this batch.
+        model: Pre-loaded model (stays on GPU across batches).
+        tokenizer: Model tokenizer.
+        model_device: Device the model is on.
+        n_gpus: Number of available GPUs.
+        config_path: Path to sae_training.yaml.
+        output_dir: Base directory for SAE outputs.
+        training_tokens: Tokens to train each SAE on.
+        batch_idx: Current batch index (0-based, for logging).
+        total_batches: Total number of batches (for logging).
+
+    Returns:
+        List of failed worker names (empty if all succeeded).
+    """
+    batch_sae_ids = [hp.sae_id for hp in batch_hps]
+    logger.info(
+        "=== Batch %d/%d: %s ===",
+        batch_idx + 1,
+        total_batches,
+        ", ".join(batch_sae_ids),
+    )
+
+    # Assign devices for this batch
+    _, sae_devices = assign_devices(batch_sae_ids, n_gpus)
+    for sid, dev in sae_devices.items():
+        logger.info("  %s → %s", sid, dev)
+
+    # Fresh queues and error_event per batch
+    queues: dict[int, MPQueue] = {}
+    for hp in batch_hps:
+        queues[hp.layer] = mp.Queue(maxsize=8)
+
+    error_event = mp.Event()
+    layers = [hp.layer for hp in batch_hps]
+
+    # Start SAE worker processes for this batch
+    workers: list[mp.Process] = []
+    for hp in batch_hps:
+        p = mp.Process(
+            target=sae_worker,
+            args=(
+                hp.sae_id,
+                hp.layer,
+                queues[hp.layer],
+                sae_devices[hp.sae_id],
+                config_path,
+                output_dir,
+                error_event,
+            ),
+            name=f"sae-{hp.sae_id}",
+        )
+        p.start()
+        workers.append(p)
+        logger.info(
+            "Started worker %s (PID %d) on %s",
+            hp.sae_id,
+            p.pid,
+            sae_devices[hp.sae_id],
+        )
+
+    # Run producer (blocks until all tokens produced for this batch)
+    batch_start = time.monotonic()
+    run_producer(
+        model=model,
+        tokenizer=tokenizer,
+        model_device=model_device,
+        queues=queues,
+        layers=layers,
+        training_tokens=training_tokens,
+        error_event=error_event,
+    )
+
+    # Wait for all workers in this batch to finish
+    logger.info("Batch %d/%d: producer done, waiting for workers...", batch_idx + 1, total_batches)
+    failed = []
+    for p in workers:
+        p.join()
+        if p.exitcode != 0:
+            logger.error("Worker %s exited with code %d", p.name, p.exitcode)
+            failed.append(p.name)
+
+    batch_elapsed = time.monotonic() - batch_start
+    if failed:
+        logger.error("Batch %d/%d: FAILED workers: %s (%.1fs)", batch_idx + 1, total_batches, ", ".join(failed), batch_elapsed)
+    else:
+        logger.info("Batch %d/%d: all %d SAEs trained successfully (%.1fs)", batch_idx + 1, total_batches, len(batch_hps), batch_elapsed)
+
+    # Force CUDA cleanup — dead worker processes release their GPU memory,
+    # but the allocator cache may still hold fragments
+    torch.cuda.empty_cache()
+
+    return failed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Train SAEs in parallel across GPUs",
@@ -311,6 +424,14 @@ def main() -> None:
         "--n-gpus",
         type=int,
         help="Number of GPUs to use (default: auto-detect)",
+    )
+    parser.add_argument(
+        "--max-parallel",
+        type=int,
+        default=3,
+        help="Max SAEs to train concurrently per batch (default: 3). "
+             "On single H200, 3 SAEs + model fits in 140GB VRAM. "
+             "9 SAEs = 3 batches (3+3+3).",
     )
     parser.add_argument(
         "--config",
@@ -361,75 +482,69 @@ def main() -> None:
         logger.info("All requested SAEs already trained!")
         return
 
-    # Assign GPUs
+    max_parallel = args.max_parallel
     sae_ids = [hp.sae_id for hp in to_train]
-    model_device, sae_devices = assign_devices(sae_ids, n_gpus)
 
-    logger.info("=== Parallel SAE Training ===")
+    # Split into batches
+    batches = [
+        to_train[i : i + max_parallel]
+        for i in range(0, len(to_train), max_parallel)
+    ]
+
+    model_device = "cuda:0"
+
+    logger.info("=== SAE Training ===")
     logger.info("GPUs available: %d", n_gpus)
     logger.info("SAEs to train: %d", len(to_train))
+    logger.info("Max parallel: %d → %d batch(es)", max_parallel, len(batches))
     logger.info("Model device: %s", model_device)
-    for sid, dev in sae_devices.items():
-        logger.info("  %s → %s", sid, dev)
+    for i, batch in enumerate(batches):
+        logger.info("  Batch %d: %s", i + 1, [hp.sae_id for hp in batch])
 
-    # Create per-layer queues (maxsize bounds memory: ~8 batches × ~80MB = ~640MB per queue)
-    queues: dict[int, MPQueue] = {}
-    layer_to_sae: dict[int, str] = {}
-    for hp in to_train:
-        queues[hp.layer] = mp.Queue(maxsize=8)
-        layer_to_sae[hp.layer] = hp.sae_id
-
-    error_event = mp.Event()
-    layers = [hp.layer for hp in to_train]
-
-    # Start SAE worker processes
-    workers: list[mp.Process] = []
-    for hp in to_train:
-        p = mp.Process(
-            target=sae_worker,
-            args=(
-                hp.sae_id,
-                hp.layer,
-                queues[hp.layer],
-                sae_devices[hp.sae_id],
-                args.config,
-                args.output_dir,
-                error_event,
-            ),
-            name=f"sae-{hp.sae_id}",
-        )
-        p.start()
-        workers.append(p)
-        logger.info("Started worker %s (PID %d) on %s", hp.sae_id, p.pid, sae_devices[hp.sae_id])
-
-    # Run producer in main process (blocks until all tokens produced)
-    start = time.monotonic()
+    # Load model ONCE — stays resident across all batches
+    logger.info("Loading model on %s...", model_device)
+    from src.model.loader import load_model
     from src.sae.config import SAETrainingConfig
 
+    model, tokenizer = load_model(dtype="bfloat16", device=model_device)
+    logger.info("Model loaded.")
+
     config = SAETrainingConfig.from_yaml(Path(args.config), to_train[0].sae_id)
-    run_producer(
-        model_device=model_device,
-        queues=queues,
-        layers=layers,
-        training_tokens=config.training_tokens,
-        error_event=error_event,
-    )
 
-    # Wait for all workers to finish training
-    logger.info("Producer done. Waiting for SAE workers to finish training...")
-    failed = []
-    for p in workers:
-        p.join()
-        if p.exitcode != 0:
-            logger.error("Worker %s exited with code %d", p.name, p.exitcode)
-            failed.append(p.name)
+    # Train each batch sequentially
+    total_start = time.monotonic()
+    all_failed: list[str] = []
+    all_devices: dict[str, str] = {}
 
-    elapsed = time.monotonic() - start
+    for batch_idx, batch_hps in enumerate(batches):
+        _, batch_devices = assign_devices([hp.sae_id for hp in batch_hps], n_gpus)
+        all_devices.update(batch_devices)
 
-    if failed:
-        logger.error("FAILED workers: %s", ", ".join(failed))
+        failed = train_batch(
+            batch_hps=batch_hps,
+            model=model,
+            tokenizer=tokenizer,
+            model_device=model_device,
+            n_gpus=n_gpus,
+            config_path=args.config,
+            output_dir=args.output_dir,
+            training_tokens=config.training_tokens,
+            batch_idx=batch_idx,
+            total_batches=len(batches),
+        )
+        all_failed.extend(failed)
+
+    total_elapsed = time.monotonic() - total_start
+
+    if all_failed:
+        logger.error("FAILED workers: %s", ", ".join(all_failed))
     else:
-        logger.info("All %d SAEs trained successfully in %.1fs", len(to_train), elapsed)
+        logger.info(
+            "All %d SAEs trained successfully in %.1fs (%d batch(es))",
+            len(to_train),
+            total_elapsed,
+            len(batches),
+        )
 
     # Write manifest
     results_dir = Path(args.results_dir)
@@ -437,11 +552,13 @@ def main() -> None:
     manifest = {
         "script": "03_train_saes",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "elapsed_seconds": round(elapsed, 1),
+        "elapsed_seconds": round(total_elapsed, 1),
         "n_gpus": n_gpus,
+        "max_parallel": max_parallel,
+        "n_batches": len(batches),
         "sae_ids": sae_ids,
-        "device_assignment": sae_devices,
-        "failed": failed,
+        "device_assignment": all_devices,
+        "failed": all_failed,
     }
     with open(results_dir / "03_train_saes.json", "w") as f:
         json.dump(manifest, f, indent=2)

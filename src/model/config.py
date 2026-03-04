@@ -64,10 +64,10 @@ class Qwen35Config(BaseModel):
         return layer_idx % self.block_size
 
 
-# Canonical hook points for the 7 SAEs.
+# Canonical hook points for the 9 SAEs.
 #
-# 6 primary SAEs: paired DeltaNet (position 2) + Attention (position 3) at
-# early/mid/late depths for clean layer-type comparison.
+# 8 primary SAEs: paired DeltaNet (position 2) + Attention (position 3) at
+# early/early-mid/mid/late depths for clean layer-type comparison.
 #
 # 1 control SAE: DeltaNet at position 1 (mid block) to test whether position
 # within the 3-DeltaNet sequence matters independently of layer type. If
@@ -89,6 +89,21 @@ HOOK_POINTS: list[HookPoint] = [
         layer_type=LayerType.ATTENTION,
         block=2,
         description="Post-Attention (position 3 of block 2)",
+    ),
+    # --- Early-mid (block 5) ---
+    HookPoint(
+        sae_id="sae_delta_earlymid",
+        layer=22,
+        layer_type=LayerType.DELTANET,
+        block=5,
+        description="Early-mid DeltaNet (position 2 of block 5, last DeltaNet before attention)",
+    ),
+    HookPoint(
+        sae_id="sae_attn_earlymid",
+        layer=23,
+        layer_type=LayerType.ATTENTION,
+        block=5,
+        description="Early-mid Attention (position 3 of block 5)",
     ),
     # --- Mid (block 8) ---
     HookPoint(

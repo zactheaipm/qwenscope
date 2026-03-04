@@ -2,7 +2,7 @@
 # RunPod setup script for Qwen 3.5 Scope / QwenScope
 # Run this ONCE after creating the pod with network volume mounted at /workspace
 #
-# Recommended pod: H200 SXM (141 GB VRAM), 200 GB volume, ≥16 vCPUs, ≥128 GB RAM
+# Recommended pod: H200 SXM (141 GB VRAM), 200 GB volume, 50 GB container disk, ≥16 vCPUs, ≥128 GB RAM
 # Docker image: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 #
 # Usage: bash scripts/runpod_setup.sh
@@ -111,7 +111,13 @@ echo "[3/6] Upgrading PyTorch and installing fast kernels..."
 pip uninstall -y torch torchvision torchaudio triton -q 2>/dev/null || true
 pip install "torch>=2.6" "torchvision>=0.21" "torchaudio>=2.6" --index-url https://download.pytorch.org/whl/cu124 -q
 pip install flash-attn --no-build-isolation -q 2>/dev/null || echo "WARN: flash-attn install failed, will use eager attention"
-pip install causal-conv1d --no-build-isolation -q 2>/dev/null || echo "WARN: causal-conv1d install failed"
+
+# causal-conv1d: the pre-built wheels have a C++ ABI mismatch with PyTorch 2.6 pip wheels
+# (PyTorch uses _GLIBCXX_USE_CXX11_ABI=0, but the prebuilt causal-conv1d wheel uses ABI=1).
+# CAUSAL_CONV1D_FORCE_BUILD=TRUE forces a real source compilation instead of downloading
+# the broken prebuilt wheel from GitHub releases.
+CAUSAL_CONV1D_FORCE_BUILD=TRUE pip install --no-cache-dir "git+https://github.com/Dao-AILab/causal-conv1d.git" --no-build-isolation -q 2>/dev/null || echo "WARN: causal-conv1d install failed"
+
 pip install "git+https://github.com/fla-org/flash-linear-attention.git" -q
 pip install accelerate -q
 

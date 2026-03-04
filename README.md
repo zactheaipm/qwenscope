@@ -26,12 +26,14 @@ Qwen 3.5-27B organizes its 64 layers into 16 blocks of 4 layers each. Within eac
 Block k: [DeltaNet₀, DeltaNet₁, DeltaNet₂, Attention₃] × 16 blocks = 64 layers
 ```
 
-SAEs are trained at 7 hook points spanning early, mid, and late positions across both layer types:
+SAEs are trained at 9 hook points spanning early, early-mid, mid, and late positions across both layer types:
 
 | SAE ID | Layer | Type | Block | Purpose |
 |--------|-------|------|-------|---------|
 | `sae_delta_early` | 10 | DeltaNet | 2 | Early DeltaNet |
 | `sae_attn_early` | 11 | Attention | 2 | Early attention |
+| `sae_delta_earlymid` | 22 | DeltaNet | 5 | Early-mid DeltaNet |
+| `sae_attn_earlymid` | 23 | Attention | 5 | Early-mid attention |
 | `sae_delta_mid_pos1` | 33 | DeltaNet | 8 | Mid DeltaNet (position 1 — within-block control) |
 | `sae_delta_mid` | 34 | DeltaNet | 8 | Mid DeltaNet (position 2) |
 | `sae_attn_mid` | 35 | Attention | 8 | Mid attention |
@@ -53,7 +55,7 @@ Each SAE is a **TopK Sparse Autoencoder** (dictionary size 40,960 = 8× hidden d
 
 ### Training Data Mix
 
-SAEs are trained on 200M tokens per hook point with the following mix:
+SAEs are trained on 200M tokens per hook point (9 hook points total) with the following mix:
 
 - **35% UltraChat 200k** — instruction-following conversations
 - **35% WildChat-1M** — diverse real-world conversations (GDPR-filtered)
@@ -121,7 +123,7 @@ The full pipeline is implemented as 10 numbered scripts, each writing a JSON man
 |------|--------|-------------|
 | 01 | `01_setup_model.py` | Download Qwen 3.5-27B and verify activation hooks on all 64 layers |
 | 02 | `02_extract_activations.py` | Extract small activation sample for spot-checks |
-| 03 | `03_train_saes.py` | Train 7 TopK SAEs in parallel (200M tokens each, multi-GPU) |
+| 03 | `03_train_saes.py` | Train 9 TopK SAEs in batches of `--max-parallel` (default 3), 200M tokens each, model loaded once |
 | 04 | `04_evaluate_sae_quality.py` | Evaluate SAE quality (MSE, explained variance, L0, loss recovered) on both general chat and tool-use held-out data |
 | 05 | `05_build_contrastive_data.py` | Generate 1,520 contrastive prompt pairs from templates |
 | 06 | `06_identify_features.py` | Compute TAS scores, run permutation tests, FDR correction, cross-trait specificity checks |
@@ -136,7 +138,8 @@ The full pipeline is implemented as 10 numbered scripts, each writing a JSON man
 # Install dependencies (PyTorch 2.6+ required for fla compatibility)
 pip install "torch>=2.6" --index-url https://download.pytorch.org/whl/cu124
 pip install flash-attn --no-build-isolation
-pip install causal-conv1d --no-build-isolation
+# causal-conv1d must be built from source (prebuilt wheels have ABI mismatch with PyTorch 2.6)
+CAUSAL_CONV1D_FORCE_BUILD=TRUE pip install --no-cache-dir "git+https://github.com/Dao-AILab/causal-conv1d.git" --no-build-isolation
 pip install "git+https://github.com/fla-org/flash-linear-attention.git"
 pip install accelerate
 pip install -e ".[dev]"
@@ -149,7 +152,7 @@ export HF_TOKEN="your-token"           # For model download
 # Run the full pipeline (requires H200 SXM or A100 80GB)
 python scripts/01_setup_model.py
 python scripts/02_extract_activations.py
-python scripts/03_train_saes.py
+python scripts/03_train_saes.py              # 9 SAEs in 3 batches (3+3+3) by default
 python scripts/04_evaluate_sae_quality.py
 python scripts/05_build_contrastive_data.py
 python scripts/06_identify_features.py
@@ -219,7 +222,7 @@ qwenscope/
 ├── configs/
 │   ├── experiment.yaml          # Traits, domains, steering experiments
 │   ├── model.yaml               # Qwen 3.5-27B architecture parameters
-│   ├── sae_training.yaml        # SAE hyperparameters and 7 hook points
+│   ├── sae_training.yaml        # SAE hyperparameters and 9 hook points
 │   └── eval.yaml                # Evaluation config (judge model, temperature)
 ├── src/
 │   ├── model/                   # Model loading, architecture config, activation hooks
@@ -265,20 +268,22 @@ qwenscope/
 
 ## VRAM Budget for Parallel SAE Training
 
-`03_train_saes.py` loads the model once and extracts activations at all 7 hook points per forward pass, then dispatches them to parallel SAE training workers via multiprocessing queues. On a single GPU, this requires everything to be resident simultaneously:
+`03_train_saes.py` loads the model once and trains SAEs in sequential batches controlled by `--max-parallel` (default 3). Each batch extracts activations at the batch's hook points per forward pass, dispatching to parallel SAE training workers via multiprocessing queues. Between batches, worker processes exit and their VRAM is reclaimed.
+
+With `--max-parallel 3`, the 9 SAEs train in 3 batches (3+3+3). Per-batch VRAM on a single GPU:
 
 | Component | VRAM | Details |
 |-----------|------|---------|
 | Qwen 3.5-27B weights | ~54 GB | 27B params × 2 bytes (BFloat16) |
-| 7 SAE models | ~5.6 GB | 7 × ~0.8 GB (encoder 5120→40960 + decoder 40960→5120 in BF16) |
-| 7 SAE optimizer states | ~23.5 GB | 7 × ~3.4 GB (Adam momentum + variance in FP32) |
-| 7 SAE gradients | ~5.6 GB | 7 × ~0.8 GB |
+| 3 SAE models | ~2.4 GB | 3 × ~0.8 GB (encoder 5120→40960 + decoder 40960→5120 in BF16) |
+| 3 SAE optimizer states | ~10.2 GB | 3 × ~3.4 GB (Adam momentum + variance in FP32) |
+| 3 SAE gradients | ~2.4 GB | 3 × ~0.8 GB |
 | Forward pass workspace | ~10 GB | Batch of 16 × 2048 tokens through 64 layers (no grad) |
-| Activation cache | ~2.3 GB | 7 captured layers × 16 × 2048 × 5120 × 2 bytes |
+| Activation cache | ~1.0 GB | 3 captured layers × 16 × 2048 × 5120 × 2 bytes |
 | CUDA/PyTorch overhead | ~5 GB | Allocator fragmentation, kernel state |
-| **Total** | **~106 GB** | |
+| **Total** | **~85 GB** | |
 
-This exceeds the A100 80GB but fits within the H200 SXM's 141 GB, which is why H200 is the recommended single-GPU option.
+This fits comfortably on an H200 SXM (141 GB). Training all 9 simultaneously is not recommended on a single GPU due to VRAM constraints.
 
 **Multi-GPU alternative**: With 2+ A100 80GB GPUs, the script places the model on `cuda:0` (~71 GB with forward pass overhead) and distributes SAE workers across `cuda:1`..`cuda:N-1`. This works but adds PCIe transfer overhead since activations must cross the GPU interconnect for every batch.
 
