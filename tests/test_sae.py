@@ -1,4 +1,4 @@
-"""Tests for TopK SAE architecture.
+"""Tests for TopK SAE architecture and configuration.
 
 All tests run on CPU with small tensor sizes.
 """
@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 import torch
 
+from src.sae.config import SAETrainingConfig
 from src.sae.model import TopKSAE
 
 
@@ -128,6 +129,81 @@ class TestTopKSAE:
 
         assert sae.encoder.weight.grad is not None
         assert sae.decoder.weight.grad is not None
+
+
+class TestSAETrainingConfig:
+    """Test SAETrainingConfig YAML loading and per-hook overrides."""
+
+    YAML_PATH = Path("configs/sae_training.yaml")
+
+    @pytest.fixture(autouse=True)
+    def _check_yaml_exists(self) -> None:
+        if not self.YAML_PATH.exists():
+            pytest.skip("sae_training.yaml not found (CI without configs)")
+
+    def test_early_sae_gets_overridden_topk_and_dict(self) -> None:
+        """Early SAEs have topk=128, dictionary_size=20480 per YAML override."""
+        cfg = SAETrainingConfig.from_yaml(self.YAML_PATH, "sae_delta_early")
+        assert cfg.topk == 128, f"Expected topk=128 for early, got {cfg.topk}"
+        assert cfg.dictionary_size == 20480, (
+            f"Expected dict=20480 for early, got {cfg.dictionary_size}"
+        )
+        assert cfg.resample_every_n_steps == 10000, (
+            f"Expected resample=10000 for early, got {cfg.resample_every_n_steps}"
+        )
+
+    def test_attn_early_gets_same_overrides(self) -> None:
+        """Attention early SAE should also have topk=128, dict=20480."""
+        cfg = SAETrainingConfig.from_yaml(self.YAML_PATH, "sae_attn_early")
+        assert cfg.topk == 128
+        assert cfg.dictionary_size == 20480
+        assert cfg.resample_every_n_steps == 10000
+
+    def test_earlymid_gets_topk_96(self) -> None:
+        """Early-mid SAEs have topk=96 but default dictionary_size."""
+        cfg = SAETrainingConfig.from_yaml(self.YAML_PATH, "sae_delta_earlymid")
+        assert cfg.topk == 96, f"Expected topk=96 for earlymid, got {cfg.topk}"
+        # dictionary_size should fall back to global default
+        assert cfg.dictionary_size == 40960, (
+            f"Expected default dict=40960 for earlymid, got {cfg.dictionary_size}"
+        )
+
+    def test_mid_uses_global_defaults(self) -> None:
+        """Mid SAEs use global defaults (no per-hook overrides)."""
+        cfg = SAETrainingConfig.from_yaml(self.YAML_PATH, "sae_delta_mid")
+        assert cfg.topk == 64, f"Expected default topk=64 for mid, got {cfg.topk}"
+        assert cfg.dictionary_size == 40960
+        assert cfg.resample_every_n_steps == 5000
+
+    def test_late_uses_global_defaults(self) -> None:
+        """Late SAEs use global defaults."""
+        cfg = SAETrainingConfig.from_yaml(self.YAML_PATH, "sae_attn_late")
+        assert cfg.topk == 64
+        assert cfg.dictionary_size == 40960
+
+    def test_layer_and_type_parsed_correctly(self) -> None:
+        """Layer index and type are extracted from hook_point, not top-level."""
+        cfg = SAETrainingConfig.from_yaml(self.YAML_PATH, "sae_attn_mid")
+        assert cfg.layer == 35
+        assert cfg.layer_type.value == "attention"
+        assert cfg.sae_id == "sae_attn_mid"
+
+    def test_hidden_dim_from_model_yaml(self) -> None:
+        """hidden_dim should be read from model.yaml (5120 for Qwen 3.5)."""
+        cfg = SAETrainingConfig.from_yaml(self.YAML_PATH, "sae_delta_mid")
+        assert cfg.hidden_dim == 5120
+
+    def test_all_sae_ids_loadable(self) -> None:
+        """Every SAE ID in the YAML can be loaded without error."""
+        import yaml
+        with open(self.YAML_PATH) as f:
+            data = yaml.safe_load(f)
+        for sae_id in data["hook_points"]:
+            cfg = SAETrainingConfig.from_yaml(self.YAML_PATH, sae_id)
+            assert cfg.sae_id == sae_id
+            assert cfg.layer >= 0
+            assert cfg.dictionary_size > 0
+            assert cfg.topk > 0
 
 
 class TestExplainedVarianceConsistency:

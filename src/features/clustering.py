@@ -49,7 +49,7 @@ def cluster_trait_features(
     abs_tas = tas_scores.abs()
     k = min(top_k, abs_tas.shape[0])
     _, topk_indices = torch.topk(abs_tas, k)
-    topk_indices = topk_indices.numpy()
+    topk_indices = topk_indices.cpu().numpy()
 
     # Extract decoder weight vectors for these features
     # nn.Linear(dict_size, hidden_dim) stores weight as (hidden_dim, dict_size)

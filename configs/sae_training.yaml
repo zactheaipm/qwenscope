@@ -9,26 +9,43 @@ checkpoint_every_tokens: 50_000_000
 seed: 42
 
 hook_points:
+  # --- Early (block 2, ActNorm ~40-46) ---
+  # Previous run: 58-64% dead features, EV ~0.51-0.53 with k=64/dict=40960.
+  # Fix: denser coding (k=128) + smaller dict (4× hidden_dim instead of 8×)
+  # + less aggressive resampling since resample events hurt EV at early layers.
   sae_delta_early:
     layer: 10
     type: "deltanet"
     block: 2
     position: 2
+    topk: 128
+    dictionary_size: 20480
+    resample_every_n_steps: 10000
   sae_attn_early:
     layer: 11
     type: "attention"
     block: 2
     position: 3
+    topk: 128
+    dictionary_size: 20480
+    resample_every_n_steps: 10000
+
+  # --- Early-mid (block 5, ActNorm ~61) ---
+  # Previous run: 16% dead, EV ~0.68. Healthy — use k=96 as middle ground.
   sae_delta_earlymid:
     layer: 22
     type: "deltanet"
     block: 5
     position: 2
+    topk: 96
   sae_attn_earlymid:
     layer: 23
     type: "attention"
     block: 5
     position: 3
+    topk: 96
+
+  # --- Mid (block 8) --- defaults: k=64, dict=40960
   sae_delta_mid_pos1:
     layer: 33
     type: "deltanet"
@@ -45,6 +62,8 @@ hook_points:
     type: "attention"
     block: 8
     position: 3
+
+  # --- Late (block 13) --- defaults: k=64, dict=40960
   sae_delta_late:
     layer: 54
     type: "deltanet"

@@ -1423,7 +1423,7 @@ class SAETrainingDataBuilder:
         return SAETrainingIterableDataset(
             tokenizer=self.tokenizer,
             seed=self.config.seed,
-            max_seq_length=2048,
+            max_seq_length=self.config.max_seq_length,
             mode="train",
         )
 
@@ -1439,7 +1439,7 @@ class SAETrainingDataBuilder:
         return SAETrainingIterableDataset(
             tokenizer=self.tokenizer,
             seed=self.config.seed,
-            max_seq_length=2048,
+            max_seq_length=self.config.max_seq_length,
             mode="chat_eval",
         )
 
@@ -1462,7 +1462,7 @@ class SAETrainingDataBuilder:
         return SAETrainingIterableDataset(
             tokenizer=self.tokenizer,
             seed=self.config.seed + 1,  # different seed to avoid same ordering as training
-            max_seq_length=2048,
+            max_seq_length=self.config.max_seq_length,
             mode="tool_use_eval",
         )
 
@@ -1581,21 +1581,36 @@ class SAETrainingIterableDataset(IterableDataset):
         tokens, whose activations are extracted and immediately discarded by
         the activation masking step in ``ActivationStream``.
 
-        Cross-document attention: packed conversations share a single attention
-        window. Later documents attend to earlier ones via causal attention,
-        and DeltaNet recurrent state carries across boundaries. This is the
-        standard tradeoff used by all SAE training codebases; the EOS separator
-        acts as a soft boundary signal.
+        **Cross-document leakage mitigation**: Packed conversations share a
+        single attention window.  Later documents attend to earlier ones via
+        causal attention, and DeltaNet recurrent state carries information
+        across document boundaries.  To mitigate this, each packed sequence
+        includes a ``document_ids`` tensor that maps each token to its source
+        document index (0, 1, 2, ...).  The ``ActivationStream`` uses this
+        to exclude tokens within ``boundary_margin`` positions of a document
+        boundary, where cross-document contamination is strongest.
+
+        This does not fully eliminate leakage (DeltaNet recurrent state
+        affects all subsequent tokens, not just nearby ones), but it
+        removes the most contaminated activations from SAE training data.
+        EOS separators between documents provide an additional soft
+        boundary signal.
 
         Args:
             source: Iterator yielding padded tokenized examples with
                 ``input_ids`` and ``attention_mask`` of shape ``(max_seq_length,)``.
 
         Yields:
-            Packed tokenized examples with the same shape and keys.
+            Packed tokenized examples with ``input_ids``, ``attention_mask``,
+            and ``document_ids`` of shape ``(max_seq_length,)``.
+            ``document_ids[i]`` is the 0-indexed document number for token i,
+            or -1 for padding tokens.  Single-document sequences (not packed)
+            have all document_ids = 0.
         """
         eos_id = self.tokenizer.eos_token_id
         buffer_ids: list[int] = []
+        buffer_doc_ids: list[int] = []
+        current_doc: int = 0
 
         for example in source:
             ids = example["input_ids"]           # (max_seq_length,)
@@ -1612,9 +1627,15 @@ class SAETrainingIterableDataset(IterableDataset):
             # truncated to max_seq_length by _tokenize_conversation).
             if actual_len >= self.max_seq_length:
                 if buffer_ids:
-                    yield self._finalize_pack(buffer_ids)
+                    yield self._finalize_pack(buffer_ids, buffer_doc_ids)
                     buffer_ids = []
-                yield example  # Already padded to max_seq_length
+                    buffer_doc_ids = []
+                    current_doc = 0
+                # Single-document: all tokens belong to doc 0, padding is -1
+                single_doc_ids = [0] * actual_len + [-1] * (self.max_seq_length - actual_len)
+                example = dict(example)  # shallow copy to avoid mutating caller's dict
+                example["document_ids"] = torch.tensor(single_doc_ids, dtype=torch.long)
+                yield example
                 continue
 
             # Cost of appending: the doc itself + 1 EOS separator (if buffer non-empty)
@@ -1622,26 +1643,36 @@ class SAETrainingIterableDataset(IterableDataset):
 
             if buffer_ids and len(buffer_ids) + needed > self.max_seq_length:
                 # Flush current buffer before adding this document
-                yield self._finalize_pack(buffer_ids)
+                yield self._finalize_pack(buffer_ids, buffer_doc_ids)
                 buffer_ids = []
+                buffer_doc_ids = []
+                current_doc = 0
 
             # Append EOS separator between documents
             if buffer_ids:
                 buffer_ids.append(eos_id)
+                # EOS separator belongs to the preceding document
+                buffer_doc_ids.append(current_doc)
+                current_doc += 1
             buffer_ids.extend(real_ids)
+            buffer_doc_ids.extend([current_doc] * len(real_ids))
 
         # Flush remaining buffer
         if buffer_ids:
-            yield self._finalize_pack(buffer_ids)
+            yield self._finalize_pack(buffer_ids, buffer_doc_ids)
 
-    def _finalize_pack(self, token_ids: list[int]) -> dict[str, torch.Tensor]:
+    def _finalize_pack(
+        self, token_ids: list[int], doc_ids: list[int],
+    ) -> dict[str, torch.Tensor]:
         """Pad a packed sequence to max_seq_length and create attention mask.
 
         Args:
             token_ids: Concatenated token IDs (may be shorter than max_seq_length).
+            doc_ids: Per-token document index (same length as token_ids).
 
         Returns:
-            Dict with ``input_ids`` and ``attention_mask`` of shape ``(max_seq_length,)``.
+            Dict with ``input_ids``, ``attention_mask``, and ``document_ids``
+            of shape ``(max_seq_length,)``.
         """
         pad_id = self.tokenizer.pad_token_id
         if pad_id is None:
@@ -1651,6 +1682,7 @@ class SAETrainingIterableDataset(IterableDataset):
         n_pad = self.max_seq_length - n_real
         padded_ids = token_ids + [pad_id] * n_pad
         mask = [1] * n_real + [0] * n_pad
+        padded_doc_ids = doc_ids + [-1] * n_pad
 
         # Track packing efficiency
         self._pack_total_seqs += 1
@@ -1671,6 +1703,7 @@ class SAETrainingIterableDataset(IterableDataset):
         return {
             "input_ids": torch.tensor(padded_ids, dtype=torch.long),
             "attention_mask": torch.tensor(mask, dtype=torch.long),
+            "document_ids": torch.tensor(padded_doc_ids, dtype=torch.long),
         }
 
     # ------------------------------------------------------------------

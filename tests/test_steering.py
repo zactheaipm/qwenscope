@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 
 from src.sae.model import TopKSAE
-from src.steering.engine import SteeringEngine, MultiLayerSteeringEngine
+from src.steering.engine import SteeringEngine, MultiLayerSteeringEngine, MeanDiffSteeringEngine
 
 
 class MockLayer(nn.Module):
@@ -245,3 +245,123 @@ class TestMultiLayerSteering:
                 steered = model(input_ids=x)
 
         assert not torch.allclose(baseline, steered, atol=1e-3)
+
+
+class TestMeanDiffSteeringEngine:
+    """Test suite for MeanDiffSteeringEngine (activation addition baseline)."""
+
+    @pytest.fixture
+    def setup(self) -> tuple[MockModel, MeanDiffSteeringEngine]:
+        """Create model and mean-diff engine for testing."""
+        model = MockModel(num_layers=4, hidden_dim=64)
+        steering_vector = torch.randn(64)
+        engine = MeanDiffSteeringEngine(model, layer=1, steering_vector=steering_vector)
+        return model, engine
+
+    def test_unit_normalization(self) -> None:
+        """Steering vector should be unit-normalized."""
+        model = MockModel(num_layers=4, hidden_dim=64)
+        vec = torch.randn(64) * 10.0
+        engine = MeanDiffSteeringEngine(model, layer=1, steering_vector=vec)
+        norm = engine._steering_vector.norm().item()
+        assert abs(norm - 1.0) < 1e-6, f"Expected unit norm, got {norm}"
+
+    def test_raw_norm_stored(self) -> None:
+        """Raw (pre-normalization) norm should be stored."""
+        model = MockModel(num_layers=4, hidden_dim=64)
+        vec = torch.randn(64)
+        expected_norm = vec.norm().item()
+        engine = MeanDiffSteeringEngine(model, layer=1, steering_vector=vec)
+        assert abs(engine._raw_norm - expected_norm) < 1e-5
+
+    def test_no_change_at_multiplier_0(
+        self, setup: tuple[MockModel, MeanDiffSteeringEngine]
+    ) -> None:
+        """Multiplier=0.0 should produce no steering effect."""
+        model, engine = setup
+        engine.set_multiplier(0.0)
+        x = torch.randn(2, 1, 64)
+
+        with torch.no_grad():
+            baseline = model(input_ids=x)
+            with engine.active():
+                steered = model(input_ids=x)
+
+        assert torch.allclose(baseline, steered, atol=1e-5), (
+            f"Max diff: {(baseline - steered).abs().max()}"
+        )
+
+    def test_output_changes_at_nonzero_multiplier(
+        self, setup: tuple[MockModel, MeanDiffSteeringEngine]
+    ) -> None:
+        """Non-zero multiplier should change output during decode (seq_len=1)."""
+        model, engine = setup
+        engine.set_multiplier(5.0)
+        x = torch.randn(2, 1, 64)
+
+        with torch.no_grad():
+            baseline = model(input_ids=x)
+            with engine.active():
+                steered = model(input_ids=x)
+
+        assert not torch.allclose(baseline, steered, atol=1e-3), (
+            "Steered output should differ from baseline"
+        )
+
+    def test_skips_prefill(
+        self, setup: tuple[MockModel, MeanDiffSteeringEngine]
+    ) -> None:
+        """Steering should NOT fire during prefill (seq_len > 1)."""
+        model, engine = setup
+        engine.set_multiplier(10.0)
+        x = torch.randn(2, 5, 64)  # seq_len=5 -> prefill
+
+        with torch.no_grad():
+            baseline = model(input_ids=x)
+            with engine.active():
+                steered = model(input_ids=x)
+
+        assert torch.allclose(baseline, steered, atol=1e-6), (
+            "Mean-diff steering should not fire during prefill"
+        )
+
+    def test_hook_cleanup(
+        self, setup: tuple[MockModel, MeanDiffSteeringEngine]
+    ) -> None:
+        """Hook should be removed after context manager exits."""
+        model, engine = setup
+        engine.set_multiplier(5.0)
+        layer_module = model.model.layers[1]
+        hooks_before = len(layer_module._forward_hooks)
+
+        with engine.active():
+            hooks_during = len(layer_module._forward_hooks)
+            assert hooks_during == hooks_before + 1
+
+        hooks_after = len(layer_module._forward_hooks)
+        assert hooks_after == hooks_before, (
+            f"Hook not cleaned up: {hooks_before} before, {hooks_after} after"
+        )
+
+    def test_steering_magnitude_scales_with_multiplier(
+        self, setup: tuple[MockModel, MeanDiffSteeringEngine]
+    ) -> None:
+        """Doubling the multiplier should roughly double the steering delta."""
+        model, engine = setup
+        x = torch.randn(2, 1, 64)
+
+        with torch.no_grad():
+            baseline = model(input_ids=x)
+
+            engine.set_multiplier(2.0)
+            with engine.active():
+                steered_2x = model(input_ids=x)
+
+            engine.set_multiplier(4.0)
+            with engine.active():
+                steered_4x = model(input_ids=x)
+
+        delta_2x = (steered_2x - baseline).norm()
+        delta_4x = (steered_4x - baseline).norm()
+        ratio = delta_4x / max(delta_2x, 1e-8)
+        assert 1.5 < ratio < 2.5, f"Expected ratio ~2.0, got {ratio:.2f}"

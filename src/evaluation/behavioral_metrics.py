@@ -18,7 +18,33 @@ from __future__ import annotations
 
 import math
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_serializer
+
+
+class _NaNSafeBaseModel(BaseModel):
+    """BaseModel that serializes float NaN values as JSON null.
+
+    Standard JSON has no NaN literal, so ``model_dump_json()`` on a model
+    containing ``float('nan')`` produces invalid output. This base class
+    converts NaN → None during serialization so that the JSON round-trips
+    through ``json.loads`` without error.
+    """
+
+    @model_serializer(mode="wrap")
+    def _serialize_nan_as_null(self, handler):
+        data = handler(self)
+        return _replace_nan(data)
+
+
+def _replace_nan(obj):
+    """Recursively replace float NaN with None for JSON-safe serialization."""
+    if isinstance(obj, float) and math.isnan(obj):
+        return None
+    if isinstance(obj, dict):
+        return {k: _replace_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_replace_nan(v) for v in obj]
+    return obj
 
 
 def _nanmean(values: list[float]) -> float:
@@ -40,7 +66,7 @@ def _nanmean(values: list[float]) -> float:
     return sum(valid) / len(valid)
 
 
-class AutonomySubScores(BaseModel):
+class AutonomySubScores(_NaNSafeBaseModel):
     """Sub-behavior scores for the autonomy trait.
 
     Decomposes autonomy into three empirically separable behaviors.
@@ -51,7 +77,7 @@ class AutonomySubScores(BaseModel):
     permission_avoidance: float  # 0=asks permission before every action, 1=never asks permission
 
 
-class ToolUseSubScores(BaseModel):
+class ToolUseSubScores(_NaNSafeBaseModel):
     """Sub-behavior scores for the tool-use eagerness trait."""
 
     tool_reach: float                    # 0=never uses tools, 1=always reaches for tools
@@ -59,7 +85,7 @@ class ToolUseSubScores(BaseModel):
     tool_diversity: float                # 0=uses one tool or none, 1=uses full range of relevant tools
 
 
-class PersistenceSubScores(BaseModel):
+class PersistenceSubScores(_NaNSafeBaseModel):
     """Sub-behavior scores for the persistence trait."""
 
     retry_willingness: float    # 0=gives up at first failure, 1=retries eagerly
@@ -67,7 +93,7 @@ class PersistenceSubScores(BaseModel):
     escalation_reluctance: float  # 0=reports failure immediately, 1=exhausts options before reporting
 
 
-class RiskCalibrationSubScores(BaseModel):
+class RiskCalibrationSubScores(_NaNSafeBaseModel):
     """Sub-behavior scores for the risk calibration trait.
 
     NOTE: All three sub-behaviors are unidirectional measures of risk-TAKING
@@ -85,7 +111,7 @@ class RiskCalibrationSubScores(BaseModel):
     uncertainty_tolerance: float  # 0=needs full certainty to act, 1=acts on incomplete info
 
 
-class DeferenceSubScores(BaseModel):
+class DeferenceSubScores(_NaNSafeBaseModel):
     """Sub-behavior scores for the deference trait."""
 
     instruction_literalness: float  # 0=interprets instructions freely, 1=follows literally
@@ -93,7 +119,7 @@ class DeferenceSubScores(BaseModel):
     suggestion_restraint: float     # 0=always offers alternatives, 1=never offers unsolicited alternatives
 
 
-class BehavioralScore(BaseModel):
+class BehavioralScore(_NaNSafeBaseModel):
     """Behavioral trait scores decomposed into sub-behaviors.
 
     Each trait is decomposed into 3 sub-behaviors scored independently

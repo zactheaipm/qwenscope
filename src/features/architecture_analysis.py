@@ -38,6 +38,11 @@ class TraitLayerTypeComparison(BaseModel):
     attention_significant_features: int
     mwu_statistic: float
     mwu_pvalue: float
+    # Rank-biserial correlation: the proper effect size for Mann-Whitney U.
+    # Range [-1, 1]. Positive means attention > deltanet.
+    # r = 1 - 2U/(n1*n2).  Interpretable regardless of sample size,
+    # unlike the p-value which is meaningless at n > 100K.
+    rank_biserial_r: float
     stronger_layer_type: str  # "deltanet" or "attention"
 
 
@@ -84,7 +89,7 @@ def compare_layer_types(
         attention_tas_all = []
 
         for sae_id, tas in sae_tas.items():
-            abs_tas = tas.abs().numpy()
+            abs_tas = tas.abs().cpu().numpy()
             if sae_id in deltanet_sae_ids:
                 deltanet_tas_all.append(abs_tas)
             elif sae_id in attention_sae_ids:
@@ -108,10 +113,19 @@ def compare_layer_types(
         delta_sig = int(np.sum(deltanet_combined > significance_threshold))
         attn_sig = int(np.sum(attention_combined > significance_threshold))
 
-        # Mann-Whitney U test on full distributions (not truncated tails)
+        # Mann-Whitney U test on full distributions (not truncated tails).
+        # WARNING: With n > 100K per group, p-values are effectively always 0
+        # and convey no useful information. Use the rank-biserial correlation
+        # (effect size) instead for any claims about DeltaNet vs attention.
         mwu_stat, mwu_p = stats.mannwhitneyu(
             deltanet_combined, attention_combined, alternative="two-sided"
         )
+
+        # Rank-biserial correlation: r = 1 - 2U/(n1*n2).
+        # Positive r means attention |TAS| tends to be larger.
+        n1 = len(deltanet_combined)
+        n2 = len(attention_combined)
+        rank_biserial = 1.0 - 2.0 * float(mwu_stat) / max(n1 * n2, 1)
 
         stronger = "attention" if attn_top20 > delta_top20 else "deltanet"
 
@@ -125,15 +139,18 @@ def compare_layer_types(
             attention_significant_features=attn_sig,
             mwu_statistic=float(mwu_stat),
             mwu_pvalue=float(mwu_p),
+            rank_biserial_r=rank_biserial,
             stronger_layer_type=stronger,
         )
 
         logger.info(
-            "Trait %s: DeltaNet top-20 mean=%.3f, Attention top-20 mean=%.3f → %s stronger",
+            "Trait %s: DeltaNet top-20 mean=%.3f, Attention top-20 mean=%.3f "
+            "→ %s stronger (rank-biserial r=%.3f)",
             trait.value,
             delta_top20,
             attn_top20,
             stronger,
+            rank_biserial,
         )
 
     # Summary
@@ -161,7 +178,10 @@ class WithinBlockComparison(BaseModel):
     pos2_mean_top20_tas: float  # sae_delta_mid (position 2)
     mwu_statistic: float
     mwu_pvalue: float
-    position_effect_significant: bool  # p < 0.05
+    # Bonferroni-corrected p-value: raw_p * n_traits_tested.
+    # With 5 traits tested at α=0.05, uncorrected FWER ≈ 23%.
+    bonferroni_pvalue: float
+    position_effect_significant: bool  # bonferroni_pvalue < 0.05
 
 
 def compare_within_block_positions(
@@ -184,7 +204,8 @@ def compare_within_block_positions(
     Returns:
         Dict mapping trait name to WithinBlockComparison.
     """
-    results: dict[str, WithinBlockComparison] = {}
+    # First pass: compute raw p-values for all traits
+    raw_results: dict[str, dict] = {}
 
     for trait, sae_tas in all_tas.items():
         if pos1_sae_id not in sae_tas or pos2_sae_id not in sae_tas:
@@ -194,8 +215,8 @@ def compare_within_block_positions(
             )
             continue
 
-        pos1_tas = sae_tas[pos1_sae_id].abs().numpy()
-        pos2_tas = sae_tas[pos2_sae_id].abs().numpy()
+        pos1_tas = sae_tas[pos1_sae_id].abs().cpu().numpy()
+        pos2_tas = sae_tas[pos2_sae_id].abs().cpu().numpy()
 
         pos1_top20 = float(np.mean(np.sort(pos1_tas)[-20:]))
         pos2_top20 = float(np.mean(np.sort(pos2_tas)[-20:]))
@@ -204,22 +225,40 @@ def compare_within_block_positions(
             pos1_tas, pos2_tas, alternative="two-sided"
         )
 
-        results[trait.value] = WithinBlockComparison(
-            trait=trait,
-            pos1_mean_top20_tas=pos1_top20,
-            pos2_mean_top20_tas=pos2_top20,
-            mwu_statistic=float(mwu_stat),
-            mwu_pvalue=float(mwu_p),
-            position_effect_significant=mwu_p < 0.05,
+        raw_results[trait.value] = {
+            "trait": trait,
+            "pos1_top20": pos1_top20,
+            "pos2_top20": pos2_top20,
+            "mwu_stat": float(mwu_stat),
+            "mwu_p": float(mwu_p),
+        }
+
+    # Second pass: apply Bonferroni correction across all tested traits
+    n_tests = len(raw_results)
+    results: dict[str, WithinBlockComparison] = {}
+
+    for trait_name, data in raw_results.items():
+        bonferroni_p = min(data["mwu_p"] * n_tests, 1.0)
+
+        results[trait_name] = WithinBlockComparison(
+            trait=data["trait"],
+            pos1_mean_top20_tas=data["pos1_top20"],
+            pos2_mean_top20_tas=data["pos2_top20"],
+            mwu_statistic=data["mwu_stat"],
+            mwu_pvalue=data["mwu_p"],
+            bonferroni_pvalue=bonferroni_p,
+            position_effect_significant=bonferroni_p < 0.05,
         )
 
         logger.info(
-            "Within-block %s: pos1 top-20=%.3f, pos2 top-20=%.3f, p=%.4f%s",
-            trait.value,
-            pos1_top20,
-            pos2_top20,
-            mwu_p,
-            " (SIGNIFICANT)" if mwu_p < 0.05 else "",
+            "Within-block %s: pos1 top-20=%.3f, pos2 top-20=%.3f, "
+            "raw_p=%.4f, bonferroni_p=%.4f%s",
+            trait_name,
+            data["pos1_top20"],
+            data["pos2_top20"],
+            data["mwu_p"],
+            bonferroni_p,
+            " (SIGNIFICANT)" if bonferroni_p < 0.05 else "",
         )
 
     return results
@@ -233,8 +272,8 @@ def trait_localization_score(
     A high localization score means the trait's top features are concentrated
     in one layer type. A low score means they're distributed across both.
 
-    Uses the Gini coefficient on the distribution of top-feature counts
-    across SAEs as the localization metric.
+    Uses the max-deviation from uniform distribution as the localization
+    metric, normalized to [0, 1].
 
     Args:
         all_tas: Nested dict: trait → sae_id → TAS tensor.
@@ -251,10 +290,32 @@ def trait_localization_score(
     deltanet_sae_ids = {hp.sae_id for hp in HOOK_POINTS if hp.layer_type == LayerType.DELTANET}
     attention_sae_ids = {hp.sae_id for hp in HOOK_POINTS if hp.layer_type == LayerType.ATTENTION}
 
-    # Group by depth
-    early_sae_ids = {"sae_attn_early", "sae_delta_early"}
-    mid_sae_ids = {"sae_attn_mid", "sae_delta_mid", "sae_delta_mid_pos1"}
-    late_sae_ids = {"sae_attn_late", "sae_delta_late"}
+    # Group by depth — derive from HOOK_POINTS to stay in sync when new
+    # hook points are added (e.g., earlymid was missing before this fix).
+    def _depth_group(sae_id: str) -> str | None:
+        """Classify SAE ID into a depth group by matching block-based naming."""
+        # Order matters: check "earlymid" before "early" and "mid" to avoid
+        # substring ambiguity (e.g., "sae_delta_earlymid" contains both "early" and "mid").
+        if "earlymid" in sae_id:
+            return "earlymid"
+        if "early" in sae_id:
+            return "early"
+        if "late" in sae_id:
+            return "late"
+        if "mid" in sae_id:
+            return "mid"
+        return None
+
+    depth_groups: dict[str, set[str]] = {"early": set(), "earlymid": set(), "mid": set(), "late": set()}
+    for hp in HOOK_POINTS:
+        group = _depth_group(hp.sae_id)
+        if group is not None:
+            depth_groups[group].add(hp.sae_id)
+
+    early_sae_ids = depth_groups["early"]
+    earlymid_sae_ids = depth_groups["earlymid"]
+    mid_sae_ids = depth_groups["mid"]
+    late_sae_ids = depth_groups["late"]
 
     for trait, sae_tas in all_tas.items():
         # Count significant features per SAE
@@ -263,24 +324,41 @@ def trait_localization_score(
             top20_mean = float(tas.abs().topk(min(20, tas.shape[0])).values.mean().item())
             sae_counts[sae_id] = top20_mean
 
-        # Layer type localization
-        delta_score = sum(sae_counts.get(s, 0) for s in deltanet_sae_ids)
-        attn_score = sum(sae_counts.get(s, 0) for s in attention_sae_ids)
+        # Layer type localization — normalize by group size to avoid bias
+        # from unequal SAE counts (5 DeltaNet SAEs vs 4 attention SAEs).
+        n_delta = max(len(deltanet_sae_ids & sae_tas.keys()), 1)
+        n_attn = max(len(attention_sae_ids & sae_tas.keys()), 1)
+        delta_score = sum(sae_counts.get(s, 0) for s in deltanet_sae_ids) / n_delta
+        attn_score = sum(sae_counts.get(s, 0) for s in attention_sae_ids) / n_attn
         total = delta_score + attn_score
         if total > 0:
             layer_type_loc = abs(delta_score - attn_score) / total
         else:
             layer_type_loc = 0.0
 
-        # Depth localization
-        early_score = sum(sae_counts.get(s, 0) for s in early_sae_ids)
-        mid_score = sum(sae_counts.get(s, 0) for s in mid_sae_ids)
-        late_score = sum(sae_counts.get(s, 0) for s in late_sae_ids)
-        depth_total = early_score + mid_score + late_score
-        if depth_total > 0:
-            depth_scores = np.array([early_score, mid_score, late_score]) / depth_total
-            # Gini-like: max deviation from uniform (1/3)
-            depth_loc = float(np.max(depth_scores) - 1 / 3) * 3  # Normalized 0-1
+        # Depth localization — normalize by group size to prevent groups
+        # with more SAEs from dominating the localization score.
+        all_depth_groups = [
+            ("early", early_sae_ids),
+            ("earlymid", earlymid_sae_ids),
+            ("mid", mid_sae_ids),
+            ("late", late_sae_ids),
+        ]
+        # Only include depth groups that have at least one SAE with TAS data
+        active_depth_scores = []
+        for _, group_ids in all_depth_groups:
+            n_group = len(group_ids & sae_tas.keys())
+            if n_group > 0:
+                group_score = sum(sae_counts.get(s, 0) for s in group_ids) / n_group
+                active_depth_scores.append(group_score)
+
+        n_groups = len(active_depth_scores)
+        depth_total = sum(active_depth_scores)
+        if depth_total > 0 and n_groups > 1:
+            depth_arr = np.array(active_depth_scores) / depth_total
+            uniform = 1.0 / n_groups
+            # Max deviation from uniform, rescaled to [0, 1]
+            depth_loc = float(np.max(depth_arr) - uniform) / (1.0 - uniform)
             depth_loc = max(0.0, min(1.0, depth_loc))
         else:
             depth_loc = 0.0

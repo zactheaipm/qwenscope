@@ -57,9 +57,11 @@ def compute_tas(
         low = torch.tensor(result.features_low_mean, dtype=torch.float64)
         diffs[i] = high - low  # (dict_size,)
 
-    # TAS = mean / std (like a t-statistic)
+    # TAS = mean / std (like a t-statistic).
+    # Explicit correction=1 (Bessel's) for consistency with the numpy ddof=1
+    # used in statistical_significance permutation tests.
     mean_diff = diffs.mean(dim=0)  # (dict_size,)
-    std_diff = diffs.std(dim=0)    # (dict_size,)
+    std_diff = diffs.std(dim=0, correction=1)  # (dict_size,)
 
     # Avoid division by zero
     tas = torch.where(
@@ -207,6 +209,58 @@ def filter_by_null_tas(
     return filtered, threshold
 
 
+def normalize_tas_cross_sae(
+    real_tas: torch.Tensor,
+    null_tas: torch.Tensor,
+) -> torch.Tensor:
+    """Z-score normalize TAS against null distribution for cross-SAE comparison.
+
+    SAEs with different architectures (dict_size, k) have different null TAS
+    distributions — a TAS of 5.0 in a 20K-feature SAE means something
+    different from 5.0 in a 40K-feature SAE. Normalizing each feature's TAS
+    by the null distribution's standard deviation puts all SAEs into the same
+    units: "standard deviations above chance for this SAE's architecture."
+
+    This enables fair cross-SAE comparison (e.g., in ``_get_best_sae_for_trait``)
+    when SAEs use different dict_size or k values across depth bands.
+
+    Args:
+        real_tas: TAS scores from real contrastive pairs, shape (dict_size,).
+        null_tas: TAS scores from null control pairs, shape (dict_size,).
+
+    Returns:
+        Normalized TAS of shape (dict_size,). Each value is the number of
+        null-distribution standard deviations the real TAS exceeds the null
+        mean. Features below the null mean get negative values.
+    """
+    null_abs = null_tas.abs().float()
+    null_mean = null_abs.mean()
+    null_std = null_abs.std()
+
+    if null_std < 1e-8:
+        logger.warning(
+            "Null TAS distribution has near-zero std (%.2e) — "
+            "normalization would be unstable. Returning raw TAS.",
+            null_std.item(),
+        )
+        return real_tas
+
+    normalized = (real_tas.abs().float() - null_mean) / null_std
+    # Preserve sign of original TAS (positive = fires more on HIGH)
+    normalized = normalized * real_tas.sign().float()
+
+    logger.info(
+        "TAS normalized: null_mean=%.3f, null_std=%.3f, "
+        "max normalized=%.3f, features >2σ: %d / %d",
+        null_mean.item(),
+        null_std.item(),
+        normalized.abs().max().item(),
+        int((normalized.abs() > 2.0).sum().item()),
+        real_tas.shape[0],
+    )
+    return normalized
+
+
 def statistical_significance(
     extraction_results: FeatureExtractionResults,
     trait: BehavioralTrait,
@@ -294,12 +348,15 @@ def batch_significance_with_fdr(
         List of (feature_idx, raw_p, corrected_p, is_significant) tuples
         sorted by corrected p-value.
     """
-    # Compute raw p-values for all features
+    # Compute raw p-values for all features.
+    # Each feature gets a different seed (seed + feature_idx) to avoid
+    # correlated permutation sequences across features, which would
+    # compromise FDR control.
     raw_pvals = []
     for idx in feature_indices:
         p = statistical_significance(
             extraction_results, trait, sae_id, idx,
-            n_permutations=n_permutations, seed=seed,
+            n_permutations=n_permutations, seed=seed + idx,
         )
         raw_pvals.append((idx, p))
 
@@ -310,26 +367,26 @@ def batch_significance_with_fdr(
 
     sorted_pvals = sorted(raw_pvals, key=lambda x: x[1])
 
-    # BH step-down: find the largest k where p_(k) <= (k/m)*alpha
-    k_max = 0
-    for rank, (idx, raw_p) in enumerate(sorted_pvals, start=1):
-        bh_threshold = rank / n_tests * alpha
-        if raw_p <= bh_threshold:
-            k_max = rank
-
-    # All ranks <= k_max are significant (step-down property)
+    # Compute corrected p-values: p_corrected(k) = p_raw(k) * n / rank
     results = []
     for rank, (idx, raw_p) in enumerate(sorted_pvals, start=1):
         corrected_p = min(raw_p * n_tests / rank, 1.0)
-        is_significant = rank <= k_max
-        results.append((idx, raw_p, corrected_p, is_significant))
+        results.append((idx, raw_p, corrected_p, False))  # significance set below
 
-    # Enforce monotonicity of corrected p-values (step-up)
+    # Enforce monotonicity of corrected p-values (step-up from the bottom):
+    # corrected_p(k) = min(corrected_p(k), corrected_p(k+1))
     for i in range(len(results) - 2, -1, -1):
-        idx_i, raw_i, corr_i, sig_i = results[i]
+        idx_i, raw_i, corr_i, _ = results[i]
         _, _, corr_next, _ = results[i + 1]
         if corr_i > corr_next:
-            results[i] = (idx_i, raw_i, corr_next, sig_i)
+            results[i] = (idx_i, raw_i, corr_next, False)
+
+    # Determine significance from the monotonicity-enforced corrected p-values.
+    # This is consistent by construction: corrected_p <= alpha ⟺ significant.
+    results = [
+        (idx, raw_p, corr_p, corr_p <= alpha)
+        for idx, raw_p, corr_p, _ in results
+    ]
 
     # Re-sort by corrected p-value
     results.sort(key=lambda x: x[2])
@@ -386,6 +443,36 @@ def compute_tas_cluster_robust(
         logger.warning("No pair results for %s / %s", trait.value, sae_id)
         return torch.zeros(0), 0
 
+    # Validate that consecutive pairs share the same template cluster.
+    # Pair IDs follow the convention "trait_domain_NNN" where NNN // pairs_per_template
+    # gives the cluster index. If pairs are not grouped by template, the clustering
+    # assumption is violated and we should warn.
+    if hasattr(pair_results[0], "pair_id") and pair_results[0].pair_id:
+        for cluster_start in range(0, len(pair_results) - pairs_per_template + 1, pairs_per_template):
+            cluster_ids = [
+                pair_results[cluster_start + k].pair_id
+                for k in range(pairs_per_template)
+                if hasattr(pair_results[cluster_start + k], "pair_id")
+            ]
+            if len(cluster_ids) == pairs_per_template:
+                # Extract template base: everything before the last underscore-separated variation index
+                bases = set()
+                for pid in cluster_ids:
+                    # "autonomy_coding_003" -> base "autonomy_coding", variation "003"
+                    parts = pid.rsplit("_", 1)
+                    if len(parts) == 2:
+                        bases.add(parts[0])
+                if len(bases) > 1:
+                    logger.warning(
+                        "Cluster-robust TAS for %s / %s: pairs at indices %d-%d "
+                        "span multiple templates (%s). Results may be unreliable. "
+                        "Ensure pairs are ordered by template before calling.",
+                        trait.value, sae_id,
+                        cluster_start, cluster_start + pairs_per_template - 1,
+                        bases,
+                    )
+                    break  # Log once, not for every cluster
+
     dict_size = len(pair_results[0].features_high_mean)
     n_pairs = len(pair_results)
 
@@ -422,9 +509,9 @@ def compute_tas_cluster_robust(
     )
     cluster_means = cluster_diffs.mean(dim=1)  # (n_clusters, dict_size)
 
-    # TAS on cluster means
+    # TAS on cluster means — correction=1 (Bessel's) for consistency.
     mean_diff = cluster_means.mean(dim=0)  # (dict_size,)
-    std_diff = cluster_means.std(dim=0)    # (dict_size,)
+    std_diff = cluster_means.std(dim=0, correction=1)  # (dict_size,)
 
     tas = torch.where(
         std_diff > 1e-8,
@@ -588,19 +675,32 @@ def fdr_screen_all_features(
     if n == 0:
         return []
 
-    # BH procedure on all features
-    order = np.argsort(p_values)                  # ascending by raw p
+    # BH step-down procedure on all features.
+    # 1. Sort by raw p ascending.
+    # 2. Find k_max: largest rank k where p_(k) <= (k/n) * alpha.
+    # 3. Reject all features with rank <= k_max (step-down property).
+    #
+    # The previous elementwise comparison (p_i <= rank_i/n * alpha) is WRONG
+    # because it can produce non-monotonic rejections: a feature with a larger
+    # p-value marked significant while one with a smaller p-value is not.
+    order = np.argsort(p_values)                  # indices that sort ascending
     ranks = np.empty(n, dtype=int)
     ranks[order] = np.arange(1, n + 1)
 
-    bh_thresholds = ranks / n * alpha
-    corrected = np.minimum(p_values * n / ranks, 1.0)
+    # Find k_max: scan sorted p-values against BH thresholds
+    k_max = 0
+    for rank_k in range(1, n + 1):
+        feature_idx = order[rank_k - 1]           # feature with the k-th smallest p
+        if p_values[feature_idx] <= (rank_k / n) * alpha:
+            k_max = rank_k
 
-    # Enforce monotonicity: corrected p at rank k = min(corrected[k:])
+    # All features with rank <= k_max are significant (step-down property)
+    is_significant = ranks <= k_max
+
+    # Corrected p-values with monotonicity enforcement
+    corrected = np.minimum(p_values * n / ranks, 1.0)
     for i in range(n - 2, -1, -1):
         corrected[order[i]] = min(corrected[order[i]], corrected[order[i + 1]])
-
-    is_significant = p_values <= bh_thresholds
 
     results = [
         (int(i), float(p_values[i]), float(corrected[i]), bool(is_significant[i]))
@@ -698,7 +798,7 @@ def compute_sub_behavior_tas(
         diffs[i] = high - low
 
     mean_diff = diffs.mean(dim=0)
-    std_diff = diffs.std(dim=0)
+    std_diff = diffs.std(dim=0, correction=1)
 
     tas = torch.where(
         std_diff > 1e-8,

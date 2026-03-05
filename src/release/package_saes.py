@@ -34,10 +34,8 @@ def package_for_huggingface(
 
     Creates:
     - README.md (model card)
-    - config.json (architecture + training config)
-    - sae_attn_early/ (safetensors + feature descriptions)
-    - sae_delta_early/ (safetensors + feature descriptions)
-    - ... (6 SAE directories total)
+    - config.json (architecture + training config per hook point)
+    - sae_<type>_<depth>/ directories (safetensors + feature descriptions)
     - demo.ipynb (Colab notebook)
 
     When ``redact_steering_data`` is True (the default), the package
@@ -50,7 +48,7 @@ def package_for_huggingface(
     only for internal/private releases.
 
     Args:
-        sae_dir: Directory containing all 6 trained SAE subdirectories.
+        sae_dir: Directory containing trained SAE subdirectories.
         output_dir: Output directory for HF upload.
         quality_metrics: sae_id → quality metric dict.
         feature_descriptions: Optional sae_id → {feature_idx: description}.
@@ -66,25 +64,46 @@ def package_for_huggingface(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Global config
+    # Build per-hook-point config by reading each SAE's actual checkpoint config.
+    # This avoids hardcoding dict_size/topk which differ across hook points
+    # (e.g., early SAEs use dict_size=20480, topk=128; earlymid uses topk=96).
+    hook_point_configs = {}
+    for hp in HOOK_POINTS:
+        hp_config: dict[str, Any] = {
+            "layer": hp.layer,
+            "layer_type": hp.layer_type.value,
+            "block": hp.block,
+            "description": hp.description,
+        }
+        # Read actual hyperparameters from SAE checkpoint config
+        sae_config_path = sae_dir / hp.sae_id / "config.json"
+        if sae_config_path.exists():
+            with open(sae_config_path) as cf:
+                sae_cfg = json.load(cf)
+            hp_config["dict_size"] = sae_cfg.get("dict_size", sae_cfg.get("dictionary_size"))
+            hp_config["topk"] = sae_cfg.get("k", sae_cfg.get("topk"))
+            if hp_config["dict_size"] is None:
+                logger.warning(
+                    "SAE config for %s has no 'dict_size' or 'dictionary_size' key — "
+                    "config.json will have null. Check %s",
+                    hp.sae_id, sae_config_path,
+                )
+            if hp_config["topk"] is None:
+                logger.warning(
+                    "SAE config for %s has no 'k' or 'topk' key — "
+                    "config.json will have null. Check %s",
+                    hp.sae_id, sae_config_path,
+                )
+        hook_point_configs[hp.sae_id] = hp_config
+
     config = {
         "model_type": "topk_sae",
         "base_model": "Qwen/Qwen3.5-27B",
         "architecture": "Qwen 3.5-27B hybrid (DeltaNet + Attention)",
         "hidden_dim": 5120,
-        "dict_size": 40960,
-        "topk": 64,
         "training_tokens": 200_000_000,
         "training_methodology": "FAST (sequential instruction-following + tool-use)",
-        "hook_points": {
-            hp.sae_id: {
-                "layer": hp.layer,
-                "layer_type": hp.layer_type.value,
-                "block": hp.block,
-                "description": hp.description,
-            }
-            for hp in HOOK_POINTS
-        },
+        "hook_points": hook_point_configs,
     }
 
     with open(output_dir / "config.json", "w") as f:
@@ -111,14 +130,23 @@ def package_for_huggingface(
             with open(dest / "quality_metrics.json", "w") as f:
                 json.dump(quality_metrics[hp.sae_id], f, indent=2)
 
-        # Feature descriptions
-        if feature_descriptions and hp.sae_id in feature_descriptions:
+        # Feature descriptions — only included when redact_steering_data is
+        # False.  Descriptions may reference trait names (e.g., "autonomy-
+        # related feature"), which would leak trait-associated feature lists
+        # even when TAS scores are redacted.
+        if not redact_steering_data and feature_descriptions and hp.sae_id in feature_descriptions:
             with open(dest / "feature_descriptions.json", "w") as f:
                 json.dump(
                     {str(k): v for k, v in feature_descriptions[hp.sae_id].items()},
                     f,
                     indent=2,
                 )
+        elif redact_steering_data and feature_descriptions and hp.sae_id in feature_descriptions:
+            logger.info(
+                "Redacted feature descriptions for %s — descriptions may "
+                "reference trait names, leaking trait-associated feature lists",
+                hp.sae_id,
+            )
 
         # TAS scores — only included when redact_steering_data is False
         if not redact_steering_data and tas_scores and hp.sae_id in tas_scores:

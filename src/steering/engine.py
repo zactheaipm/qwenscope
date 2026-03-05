@@ -60,6 +60,13 @@ class SteeringEngine:
         self.layer = layer
         self._feature_indices: list[int] = []
         self._multiplier: float = 1.0
+        # When True, steering fires at ALL sequence positions (not just
+        # decode-phase seq_len==1).  Used by measurement code like
+        # measure_cross_layer_interaction that needs to observe the causal
+        # effect of steering during a full prefill forward pass.  Must NEVER
+        # be True during normal autoregressive generation (it would corrupt
+        # the prompt representation).
+        self.steer_all_positions: bool = False
         # Cache the SAE dtype to avoid repeated introspection in the hot path.
         self._sae_dtype = next(sae.parameters()).dtype
 
@@ -123,10 +130,11 @@ class SteeringEngine:
         """
         hidden_states = output[0] if isinstance(output, tuple) else output
 
-        # Only steer during autoregressive decode (seq_len == 1).
-        # During prefill, seq_len > 1 and we want the model to encode the
-        # prompt normally without any intervention.
-        if hidden_states.shape[1] != 1:
+        # Only steer during autoregressive decode (seq_len == 1) unless
+        # steer_all_positions is explicitly set for measurement purposes.
+        # During normal generation, prefill (seq_len > 1) is left untouched
+        # so the model encodes the prompt without intervention.
+        if hidden_states.shape[1] != 1 and not self.steer_all_positions:
             return output
 
         # Skip if no features configured (avoid wasteful encode/decode)
@@ -237,6 +245,23 @@ class MeanDiffSteeringEngine:
     ) -> None:
         """Initialize the mean-diff steering engine.
 
+        IMPORTANT — multiplier comparability caveat:
+        The steering vector is unit-normalized, so multiplier M adds M units
+        of displacement in the mean-diff direction.  SAE-based steering
+        multipliers scale feature activations, which have a different native
+        magnitude.  The same numeric multiplier (e.g., 5.0) produces
+        different-magnitude interventions between the two methods.
+
+        Ratio-based metrics (selectivity ratio, probability of superiority)
+        are less affected because they compare on-target vs off-target effects
+        within a single method.  But absolute Cohen's d values should NOT
+        be compared across methods at matched multiplier values.  Report
+        this caveat when presenting mean-diff baseline results alongside
+        SAE steering results.
+
+        The raw (un-normalized) steering vector norm is stored in
+        ``_raw_norm`` for reference.
+
         Args:
             model: The language model.
             layer: Layer index to steer at.
@@ -244,11 +269,9 @@ class MeanDiffSteeringEngine:
         """
         self.model = model
         self.layer = layer
-        # Normalize to unit norm so that the multiplier has a consistent
-        # scale regardless of the absolute activation magnitude at this layer.
-        # Without normalization, the multiplier is not comparable to SAE-based
-        # steering (where multipliers operate on already-normalised feature
-        # activations) and the baseline comparison is meaningless.
+        # Normalize to unit norm so that the multiplier controls
+        # displacement magnitude in interpretable units, independent
+        # of the absolute activation scale at this layer.
         vec_norm = steering_vector.norm()
         if vec_norm > 1e-8:
             self._steering_vector = steering_vector / vec_norm

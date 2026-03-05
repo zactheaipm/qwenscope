@@ -114,6 +114,26 @@ def main() -> None:
     for key, result in steering_results.items():
         logger.info("Scoring: %s", key)
 
+        # For Experiment 1 results, preserve the per-multiplier structure so
+        # that script 09 can compute per-multiplier contamination matrices.
+        if isinstance(result, dict) and "results_by_multiplier" in result:
+            for mult_str, mult_results in result["results_by_multiplier"].items():
+                mult_trajectories = []
+                for r in (mult_results if isinstance(mult_results, list) else []):
+                    if isinstance(r, dict) and r.get("trajectory"):
+                        try:
+                            mult_trajectories.append(AgentTrajectory(**r["trajectory"]))
+                        except Exception as e:
+                            logger.debug("  Failed to parse trajectory: %s", e)
+                if not mult_trajectories:
+                    continue
+                mult_scores = judge.score_batch(mult_trajectories)
+                # Write as "exp1_autonomy_5.0" so script 09 can parse the multiplier
+                mult_key = f"{key}_{mult_str}"
+                all_scores[mult_key] = [s.model_dump() for s in mult_scores]
+                logger.info("  Scored %d trajectories for %s mult=%s", len(mult_scores), key, mult_str)
+            continue
+
         raw_trajectories = _extract_trajectories_from_result(key, result)
         if not raw_trajectories:
             logger.info("  No trajectories found for %s — skipping", key)
@@ -130,15 +150,17 @@ def main() -> None:
             logger.info("  No valid trajectories for %s — skipping", key)
             continue
 
+        # Collect baseline trajectories for contamination analysis — score
+        # them only once under the "baseline" key (not twice under both keys).
+        if key == "baseline_correlations":
+            baseline_trajectories.extend(trajectories)
+            continue
+
         scores = judge.score_batch(trajectories)
         all_scores[key] = [s.model_dump() for s in scores]
         logger.info("  Scored %d trajectories", len(scores))
 
-        # Collect baseline scores for contamination matrix
-        if key == "baseline_correlations":
-            baseline_trajectories.extend(trajectories)
-
-    # Score baseline trajectories separately under the "baseline" key
+    # Score baseline trajectories under the "baseline" key
     # so script 09 can find them for contamination analysis
     if baseline_trajectories:
         baseline_scores = judge.score_batch(baseline_trajectories)

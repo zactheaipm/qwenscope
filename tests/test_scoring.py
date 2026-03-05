@@ -13,6 +13,7 @@ from src.features.extraction import FeatureExtractionResults, FeaturePairResult
 from src.features.scoring import (
     compute_tas, rank_features, statistical_significance,
     compute_sub_behavior_tas, compute_all_sub_behavior_tas, SUB_BEHAVIOR_KEYS,
+    compute_tas_cluster_robust,
 )
 
 
@@ -343,3 +344,184 @@ class TestSubBehaviorTemplateStructure:
                     assert not missing, (
                         f"{key}/{domain.value}[{i}]: missing keys {missing}"
                     )
+
+
+def _make_clustered_extraction_results(
+    n_templates: int = 5,
+    pairs_per_template: int = 4,
+    dict_size: int = 64,
+    diff_feature: int = 0,
+    diff_magnitude: float = 5.0,
+) -> FeatureExtractionResults:
+    """Create mock extraction results with template-clustered structure.
+
+    Pairs within the same template cluster share a similar signal
+    (simulating near-replicate contrastive pairs from the same system prompt).
+    """
+    torch.manual_seed(789)
+    pair_results = []
+    for t in range(n_templates):
+        # Each template has a base signal + small within-cluster noise
+        base_offset = torch.randn(dict_size) * 0.05
+        for v in range(pairs_per_template):
+            high = base_offset.clone() + torch.randn(dict_size) * 0.02
+            low = base_offset.clone() + torch.randn(dict_size) * 0.02
+            high[diff_feature] = diff_magnitude + torch.randn(1).item() * 0.3
+            low[diff_feature] = -diff_magnitude + torch.randn(1).item() * 0.3
+            pair_results.append(FeaturePairResult(
+                pair_id=f"cluster_{t}_var_{v}",
+                sae_id="sae_test",
+                pooling_strategy="last_token",
+                features_high_mean=high.tolist(),
+                features_low_mean=low.tolist(),
+            ))
+    return FeatureExtractionResults(
+        trait=BehavioralTrait.AUTONOMY,
+        results={"sae_test": pair_results},
+    )
+
+
+class TestClusterRobustTAS:
+    """Test cluster-robust TAS computation."""
+
+    def test_returns_correct_shape(self) -> None:
+        """Output tensor should match dict_size."""
+        results = _make_clustered_extraction_results(
+            n_templates=5, pairs_per_template=4, dict_size=64,
+        )
+        tas, effective_n = compute_tas_cluster_robust(
+            results, BehavioralTrait.AUTONOMY, "sae_test",
+            pairs_per_template=4,
+        )
+        assert tas.shape == (64,)
+        assert effective_n == 5
+
+    def test_strong_feature_detected(self) -> None:
+        """The engineered strong feature should have the highest cluster-robust TAS."""
+        results = _make_clustered_extraction_results(
+            n_templates=8, pairs_per_template=4, dict_size=64,
+            diff_feature=10, diff_magnitude=8.0,
+        )
+        tas, effective_n = compute_tas_cluster_robust(
+            results, BehavioralTrait.AUTONOMY, "sae_test",
+            pairs_per_template=4,
+        )
+        assert effective_n == 8
+        top_feature = tas.abs().argmax().item()
+        assert top_feature == 10, f"Expected feature 10 to be top, got {top_feature}"
+
+    def test_fewer_effective_n_than_unclustered(self) -> None:
+        """Cluster-robust TAS should use fewer effective observations."""
+        n_templates = 6
+        pairs_per_template = 4
+        results = _make_clustered_extraction_results(
+            n_templates=n_templates, pairs_per_template=pairs_per_template,
+        )
+        _, effective_n = compute_tas_cluster_robust(
+            results, BehavioralTrait.AUTONOMY, "sae_test",
+            pairs_per_template=pairs_per_template,
+        )
+        total_pairs = n_templates * pairs_per_template
+        assert effective_n == n_templates
+        assert effective_n < total_pairs
+
+    def test_cluster_robust_has_fewer_df(self) -> None:
+        """Cluster-robust TAS uses fewer effective degrees of freedom.
+
+        With near-replicate within-cluster pairs, averaging within clusters
+        reduces noise, which can actually *increase* the t-statistic. The
+        key correctness property is that effective_n (= number of clusters)
+        is smaller than total pairs — this yields correct degrees of freedom
+        for downstream significance testing.
+        """
+        results = _make_clustered_extraction_results(
+            n_templates=5, pairs_per_template=4, dict_size=64,
+            diff_feature=0, diff_magnitude=5.0,
+        )
+        naive_tas = compute_tas(results, BehavioralTrait.AUTONOMY, "sae_test")
+        cluster_tas, effective_n = compute_tas_cluster_robust(
+            results, BehavioralTrait.AUTONOMY, "sae_test",
+            pairs_per_template=4,
+        )
+        # Both should detect the strong feature
+        assert naive_tas[0].abs() > 2.0, "Naive TAS should detect strong feature"
+        assert cluster_tas[0].abs() > 2.0, "Cluster TAS should detect strong feature"
+        # The key property: effective_n < total pairs
+        assert effective_n == 5 < 20
+
+    def test_drops_remainder_pairs(self) -> None:
+        """Trailing pairs that don't fill a complete cluster are dropped."""
+        # 22 pairs with pairs_per_template=4 -> 5 clusters (20 pairs), 2 dropped
+        pair_results = []
+        torch.manual_seed(101)
+        for i in range(22):
+            high = torch.randn(32).tolist()
+            low = torch.randn(32).tolist()
+            pair_results.append(FeaturePairResult(
+                pair_id=f"test_{i}",
+                sae_id="sae_test",
+                pooling_strategy="last_token",
+                features_high_mean=high,
+                features_low_mean=low,
+            ))
+        results = FeatureExtractionResults(
+            trait=BehavioralTrait.AUTONOMY,
+            results={"sae_test": pair_results},
+        )
+        tas, effective_n = compute_tas_cluster_robust(
+            results, BehavioralTrait.AUTONOMY, "sae_test",
+            pairs_per_template=4,
+        )
+        assert effective_n == 5, f"Expected 5 clusters, got {effective_n}"
+
+    def test_fallback_when_too_few_pairs(self) -> None:
+        """Falls back to unclustered TAS when n_pairs < pairs_per_template."""
+        pair_results = []
+        torch.manual_seed(202)
+        for i in range(3):
+            pair_results.append(FeaturePairResult(
+                pair_id=f"test_{i}",
+                sae_id="sae_test",
+                pooling_strategy="last_token",
+                features_high_mean=torch.randn(16).tolist(),
+                features_low_mean=torch.randn(16).tolist(),
+            ))
+        results = FeatureExtractionResults(
+            trait=BehavioralTrait.AUTONOMY,
+            results={"sae_test": pair_results},
+        )
+        tas, effective_n = compute_tas_cluster_robust(
+            results, BehavioralTrait.AUTONOMY, "sae_test",
+            pairs_per_template=4,
+        )
+        # Should fall back: effective_n == n_pairs (unclustered)
+        assert effective_n == 3
+        assert tas.shape == (16,)
+
+    def test_min_abs_effect_filter(self) -> None:
+        """Features with negligible absolute effect get zeroed out."""
+        # Create data where feature 0 has a tiny but perfectly consistent diff
+        pair_results = []
+        for t in range(4):
+            for v in range(4):
+                high = [0.0] * 8
+                low = [0.0] * 8
+                high[0] = 0.001  # tiny consistent difference
+                low[0] = -0.001
+                pair_results.append(FeaturePairResult(
+                    pair_id=f"test_{t}_{v}",
+                    sae_id="sae_test",
+                    pooling_strategy="last_token",
+                    features_high_mean=high,
+                    features_low_mean=low,
+                ))
+        results = FeatureExtractionResults(
+            trait=BehavioralTrait.AUTONOMY,
+            results={"sae_test": pair_results},
+        )
+        tas, _ = compute_tas_cluster_robust(
+            results, BehavioralTrait.AUTONOMY, "sae_test",
+            pairs_per_template=4, min_abs_effect=0.01,
+        )
+        # Feature 0 has mean diff = 0.002 < min_abs_effect 0.01 -> should be zeroed
+        assert tas[0] == 0.0, f"Expected TAS=0 for negligible effect, got {tas[0]}"

@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
+import shutil
+import tempfile
 import uuid
 import sys
 from pathlib import Path
@@ -111,7 +114,7 @@ def _add_tool_call_ids(messages: list[dict]) -> list[dict]:
     return messages
 
 
-def clean_examples(examples: list[dict]) -> list[dict]:
+def clean_examples(examples: list[dict]) -> tuple[list[dict], dict]:
     """Clean a list of synthetic examples."""
     cleaned = []
     stats = {
@@ -208,15 +211,28 @@ def main():
     eval_deduped, n_removed = deduplicate_eval(train_clean, eval_clean)
     print(f"  Removed {n_removed} eval examples with prompts also in train")
 
-    # Write cleaned files
-    print("\nWriting cleaned data...")
-    with open(data_dir / "train_examples.jsonl", "w") as f:
-        for ex in train_clean:
-            f.write(json.dumps(ex, ensure_ascii=False) + "\n")
+    # Write cleaned files atomically: write to temp file, then rename.
+    # Back up originals first so a mid-write crash doesn't lose data.
+    print("\nWriting cleaned data (atomic write with backup)...")
+    for filename, examples in [
+        ("train_examples.jsonl", train_clean),
+        ("eval_examples.jsonl", eval_deduped),
+    ]:
+        target = data_dir / filename
+        backup = data_dir / f"{filename}.bak"
+        if target.exists():
+            shutil.copy2(target, backup)
 
-    with open(data_dir / "eval_examples.jsonl", "w") as f:
-        for ex in eval_deduped:
-            f.write(json.dumps(ex, ensure_ascii=False) + "\n")
+        # Write to a temp file in the same directory (same filesystem for atomic rename)
+        fd, tmp_path = tempfile.mkstemp(dir=data_dir, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                for ex in examples:
+                    f.write(json.dumps(ex, ensure_ascii=False) + "\n")
+            Path(tmp_path).rename(target)
+        except BaseException:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise
 
     # Update manifests
     for split, examples in [("train", train_clean), ("eval", eval_deduped)]:

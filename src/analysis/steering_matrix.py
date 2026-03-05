@@ -55,25 +55,19 @@ def compute_steering_reliability_matrix(
             steered_vals = steered_trait_scores.get(key, [])
 
             if baseline_vals and steered_vals:
+                from src.analysis.effect_sizes import cohens_d
+
                 b_arr = np.array(baseline_vals, dtype=float)
                 s_arr = np.array(steered_vals, dtype=float)
-                n_nan = int(np.isnan(b_arr).sum() + np.isnan(s_arr).sum())
-                if n_nan > 0:
-                    logger.debug(
-                        "NaN values excluded: %d in %s (baseline=%d, steered=%d)",
-                        n_nan, key, int(np.isnan(b_arr).sum()), int(np.isnan(s_arr).sum()),
-                    )
-                mean_diff = float(np.nanmean(s_arr) - np.nanmean(b_arr))
-                n1 = int((~np.isnan(b_arr)).sum())
-                n2 = int((~np.isnan(s_arr)).sum())
-                var1 = float(np.nanvar(b_arr, ddof=1)) if n1 > 1 else 0.0
-                var2 = float(np.nanvar(s_arr, ddof=1)) if n2 > 1 else 0.0
-                pooled_std = np.sqrt(
-                    ((n1 - 1) * var1 + (n2 - 1) * var2) / max(n1 + n2 - 2, 1)
-                )
+                # Strip NaNs for clean computation
+                b_valid = b_arr[~np.isnan(b_arr)]
+                s_valid = s_arr[~np.isnan(s_arr)]
+                if len(b_valid) == 0 or len(s_valid) == 0:
+                    continue
+                mean_diff = float(np.mean(s_valid) - np.mean(b_valid))
                 matrix[i, j] = mean_diff
                 if i == j:
-                    effect_sizes[i] = mean_diff / max(pooled_std, 1e-8)
+                    effect_sizes[i] = cohens_d(s_valid, b_valid)
 
     return {
         "matrix": matrix,
@@ -198,19 +192,18 @@ def bootstrap_steering_reliability(
                 base_vals = boot_baseline_agg.get(key, [])
                 steer_vals = boot_steered_agg.get(key, [])
                 if base_vals and steer_vals:
-                    diff = float(np.nanmean(steer_vals) - np.nanmean(base_vals))
+                    from src.analysis.effect_sizes import cohens_d
+
+                    b_arr = np.array(base_vals, dtype=float)
+                    s_arr = np.array(steer_vals, dtype=float)
+                    b_valid = b_arr[~np.isnan(b_arr)]
+                    s_valid = s_arr[~np.isnan(s_arr)]
+                    if len(b_valid) == 0 or len(s_valid) == 0:
+                        continue
+                    diff = float(np.mean(s_valid) - np.mean(b_valid))
                     boot_matrices[b, i, j] = diff
                     if i == j:
-                        b_arr = np.array(base_vals, dtype=float)
-                        s_arr = np.array(steer_vals, dtype=float)
-                        n1 = int((~np.isnan(b_arr)).sum())
-                        n2 = int((~np.isnan(s_arr)).sum())
-                        var1 = float(np.nanvar(b_arr, ddof=1)) if n1 > 1 else 0.0
-                        var2 = float(np.nanvar(s_arr, ddof=1)) if n2 > 1 else 0.0
-                        pooled = np.sqrt(
-                            ((n1 - 1) * var1 + (n2 - 1) * var2) / max(n1 + n2 - 2, 1)
-                        )
-                        boot_effect_sizes[b, i] = diff / max(pooled, 1e-8)
+                        boot_effect_sizes[b, i] = cohens_d(s_valid, b_valid)
 
     # Point estimates
     point = compute_steering_reliability_matrix(
@@ -367,18 +360,17 @@ def _pairwise_prob_superiority(
 ) -> float:
     """Compute P(steered > baseline) over all pairwise comparisons.
 
-    Args:
-        steered: 1-D array of steered scores.
-        baseline: 1-D array of baseline scores.
-
-    Returns:
-        Probability of superiority in [0, 1].
+    Delegates to the canonical implementation in effect_sizes.py.
+    Returns NaN (rather than 0.5) when either array has no valid data,
+    to match the steering matrix convention for missing entries.
     """
-    diff = steered[:, np.newaxis] - baseline[np.newaxis, :]
-    n_total = diff.size
-    concordant = float(np.sum(diff > 0))
-    tied = float(np.sum(diff == 0))
-    return (concordant + 0.5 * tied) / n_total
+    from src.analysis.effect_sizes import probability_of_superiority
+
+    steered_clean = steered[~np.isnan(steered)]
+    baseline_clean = baseline[~np.isnan(baseline)]
+    if len(steered_clean) == 0 or len(baseline_clean) == 0:
+        return float("nan")
+    return probability_of_superiority(steered_clean, baseline_clean)
 
 
 def _aggregate_trait_scores(

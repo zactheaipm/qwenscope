@@ -264,8 +264,15 @@ class SAETrainer:
         """
         ckpt_path = Path(ckpt_path)
 
-        # Load SAE weights
+        # Load SAE weights — validates architecture match (hidden_dim, dict_size)
         sae_loaded = TopKSAE.load(ckpt_path, device="cpu")
+        ckpt_dict_size = sae_loaded.dict_size
+        if ckpt_dict_size != self.sae.dict_size:
+            raise ValueError(
+                f"Checkpoint dict_size ({ckpt_dict_size}) != current config "
+                f"dict_size ({self.sae.dict_size}) for {ckpt_path}. "
+                f"Cannot resume — delete old checkpoints and restart fresh."
+            )
         self.sae.load_state_dict(sae_loaded.state_dict())
         logger.info("Loaded SAE weights from %s", ckpt_path)
 
@@ -281,6 +288,16 @@ class SAETrainer:
             return
 
         state = torch.load(state_file, map_location="cpu", weights_only=False)
+
+        # Validate dead-feature tracking tensor shapes match current dict_size
+        for key in ("feature_activity", "steps_since_last_active"):
+            if state[key].shape[0] != self.config.dictionary_size:
+                raise ValueError(
+                    f"Checkpoint {key} has shape {state[key].shape} but current "
+                    f"dictionary_size is {self.config.dictionary_size}. "
+                    f"Cannot resume — delete old checkpoints and restart fresh."
+                )
+
         self.optimizer.load_state_dict(state["optimizer"])
         self.scheduler.load_state_dict(state["scheduler"])
         self._step = state["step"]
@@ -337,9 +354,12 @@ class SAETrainer:
 
         for acts_batch in activation_stream.stream_tokens(self.config.training_tokens):
             # Fast-forward past already-processed tokens on resume.
+            # Use >= 0 (not > 0) to skip the exact boundary batch too: if
+            # _skip_tokens_remaining == acts_batch.shape[0], the entire batch
+            # was already seen and should be discarded.
             if _skip_tokens_remaining > 0:
                 _skip_tokens_remaining -= acts_batch.shape[0]
-                if _skip_tokens_remaining > 0:
+                if _skip_tokens_remaining >= 0:
                     continue
                 # Passed the skip point — fall through to normal training.
             if not _dtype_logged and acts_batch.dtype != sae_dtype:

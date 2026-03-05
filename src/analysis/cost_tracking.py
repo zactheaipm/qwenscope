@@ -550,7 +550,7 @@ def _detect_hardware() -> str:
 
         if torch.cuda.is_available():
             name = torch.cuda.get_device_name(0)
-            mem_bytes = torch.cuda.get_device_properties(0).total_mem
+            mem_bytes = torch.cuda.get_device_properties(0).total_memory
             mem_gb = mem_bytes / (1024 ** 3)
             parts.append(f"{name} ({mem_gb:.0f}GB)")
     except Exception:

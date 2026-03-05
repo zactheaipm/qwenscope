@@ -33,6 +33,16 @@ def main() -> None:
     all_pairs = generator.generate_all()
     generator.save_pairs(all_pairs)
 
+    # Generate null-trait control pairs for TAS significance calibration.
+    # Saved to a dedicated file so they cannot contaminate real trait pair files.
+    import jsonlines
+    null_pairs = generator.generate_null_controls()
+    null_filepath = output_dir / "null_controls.jsonl"
+    with jsonlines.open(null_filepath, mode="w") as writer:
+        for pair in null_pairs:
+            writer.write(pair.model_dump())
+    logger.info("Saved %d null control pairs to %s", len(null_pairs), null_filepath)
+
     # Also save evaluation scenarios
     from src.data.scenarios import save_default_scenarios
     scenarios = save_default_scenarios()
@@ -42,6 +52,7 @@ def main() -> None:
         "script": "05_build_contrastive_data",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "total_pairs": total,
+        "null_control_pairs": len(null_pairs),
         "pairs_per_trait": {t.value: len(v) for t, v in all_pairs.items()},
         "num_scenarios": len(scenarios),
     }

@@ -38,10 +38,16 @@ TRAIT_SCORE_KEYS = [
 def compute_contamination_matrix(
     baseline_scores: list[BehavioralScore],
     steered_scores: dict[BehavioralTrait, list[BehavioralScore]],
+    use_cohens_d: bool = True,
 ) -> np.ndarray:
     """Compute the 5x5 cross-trait contamination matrix.
 
-    Matrix[i][j] = how much steering trait i changes trait j's composite score.
+    Matrix[i][j] = effect of steering trait i on trait j's composite score.
+
+    When ``use_cohens_d`` is True (default), each cell is Cohen's d
+    (pooled-SD-normalised mean difference), making effect sizes comparable
+    across traits with different variances. When False, cells are raw mean
+    differences (legacy behaviour).
 
     Diagonal = intended effect (should be large).
     Off-diagonal = contamination (should be small).
@@ -49,30 +55,48 @@ def compute_contamination_matrix(
     Args:
         baseline_scores: Behavioral scores from unsteered model.
         steered_scores: Dict mapping each steered trait to its behavioral scores.
+        use_cohens_d: If True, report Cohen's d; if False, raw mean difference.
 
     Returns:
         (5, 5) numpy array where rows = steered trait, cols = measured trait.
     """
-    n_traits = len(TRAIT_ORDER)
-    matrix = np.zeros((n_traits, n_traits))
+    from src.analysis.effect_sizes import cohens_d
 
-    # Compute baseline means
-    baseline_means = _compute_trait_means(baseline_scores)
+    n_traits = len(TRAIT_ORDER)
+    matrix = np.full((n_traits, n_traits), np.nan)
+
+    # Pre-collect baseline arrays per trait key
+    baseline_arrays: dict[str, np.ndarray] = {}
+    for key in TRAIT_SCORE_KEYS:
+        vals = [s.trait_scores()[key] for s in baseline_scores]
+        baseline_arrays[key] = np.array(vals, dtype=float)
 
     for i, steered_trait in enumerate(TRAIT_ORDER):
         if steered_trait not in steered_scores:
             continue
 
-        steered_means = _compute_trait_means(steered_scores[steered_trait])
-
+        steered_list = steered_scores[steered_trait]
         for j, measured_key in enumerate(TRAIT_SCORE_KEYS):
-            # Change = steered - baseline
-            matrix[i][j] = steered_means.get(measured_key, 0.0) - baseline_means.get(measured_key, 0.0)
+            b_arr = baseline_arrays[measured_key]
+            s_arr = np.array(
+                [s.trait_scores()[measured_key] for s in steered_list], dtype=float
+            )
+            # Remove NaNs
+            b_valid = b_arr[~np.isnan(b_arr)]
+            s_valid = s_arr[~np.isnan(s_arr)]
+
+            if len(b_valid) < 2 or len(s_valid) < 2:
+                matrix[i][j] = np.nan
+            elif use_cohens_d:
+                matrix[i][j] = cohens_d(s_valid, b_valid)
+            else:
+                matrix[i][j] = float(np.mean(s_valid) - np.mean(b_valid))
 
     logger.info(
-        "Contamination matrix: diagonal mean=%.3f, off-diagonal mean=%.3f",
-        np.nanmean(np.diag(matrix)),
-        np.nanmean(matrix[~np.eye(n_traits, dtype=bool)]),
+        "Contamination matrix (Cohen's d=%s): diagonal mean=%.3f, off-diagonal mean=%.3f",
+        use_cohens_d,
+        np.nanmean(np.abs(np.diag(matrix))),
+        np.nanmean(np.abs(matrix[~np.eye(n_traits, dtype=bool)])),
     )
 
     return matrix
@@ -118,10 +142,9 @@ def compute_sub_behavior_contamination_matrix(
         steered_sub_means = _compute_sub_behavior_means(steered_scores[steered_trait])
 
         for j, sub_key in enumerate(SUB_BEHAVIOR_KEYS):
-            matrix[i][j] = (
-                steered_sub_means.get(sub_key, 0.0)
-                - baseline_sub_means.get(sub_key, 0.0)
-            )
+            s_val = steered_sub_means.get(sub_key, float("nan"))
+            b_val = baseline_sub_means.get(sub_key, float("nan"))
+            matrix[i][j] = s_val - b_val
 
     # Log which off-target sub-behaviors have the largest absolute change
     for i, steered_trait in enumerate(TRAIT_ORDER):
@@ -150,16 +173,17 @@ def _compute_trait_means(scores: list[BehavioralScore]) -> dict[str, float]:
     """Compute mean composite trait scores from a list of behavioral scores.
 
     Uses np.nanmean to exclude NaN values (unobservable sub-behaviors)
-    from the average.
+    from the average. Returns NaN for empty inputs to avoid creating
+    misleading contamination deltas.
 
     Args:
         scores: List of BehavioralScore objects.
 
     Returns:
-        Dict mapping trait name to mean score.
+        Dict mapping trait name to mean score. NaN for empty inputs.
     """
     if not scores:
-        return {key: 0.0 for key in TRAIT_SCORE_KEYS}
+        return {key: float("nan") for key in TRAIT_SCORE_KEYS}
 
     means = {}
     for key in TRAIT_SCORE_KEYS:
@@ -173,7 +197,7 @@ def _compute_sub_behavior_means(scores: list[BehavioralScore]) -> dict[str, floa
     """Compute mean sub-behavior scores from a list of behavioral scores.
 
     Uses np.nanmean to exclude NaN values (unobservable sub-behaviors)
-    from the average.
+    from the average. Returns NaN for empty inputs.
 
     Args:
         scores: List of BehavioralScore objects.
@@ -182,7 +206,7 @@ def _compute_sub_behavior_means(scores: list[BehavioralScore]) -> dict[str, floa
         Dict mapping sub-behavior key ('trait.sub') to mean score.
     """
     if not scores:
-        return {key: 0.0 for key in SUB_BEHAVIOR_KEYS}
+        return {key: float("nan") for key in SUB_BEHAVIOR_KEYS}
 
     means = {}
     for key in SUB_BEHAVIOR_KEYS:
@@ -218,15 +242,24 @@ def compute_baseline_correlation_matrix(
             n_scores,
         )
 
-    # Build (n_scores, n_traits) matrix
-    score_matrix = np.zeros((n_scores, n_traits))
+    # Build (n_scores, n_traits) matrix.
+    # Use NaN (not 0.0) for missing values so they don't bias correlations.
+    score_matrix = np.full((n_scores, n_traits), np.nan)
     for i, score in enumerate(baseline_scores):
         trait_dict = score.trait_scores()
         for j, key in enumerate(TRAIT_SCORE_KEYS):
-            score_matrix[i, j] = trait_dict.get(key, 0.0)
+            val = trait_dict.get(key)
+            if val is not None:
+                score_matrix[i, j] = val
 
-    # Pearson correlation
-    corr = np.corrcoef(score_matrix, rowvar=False)  # (5, 5)
+    # Drop rows that are entirely NaN before computing correlations.
+    valid_rows = ~np.all(np.isnan(score_matrix), axis=1)
+    score_matrix = score_matrix[valid_rows]
+
+    # Pairwise Pearson correlation using pandas (NaN-aware) to handle
+    # remaining per-cell NaN without biasing toward zero.
+    import pandas as pd
+    corr = pd.DataFrame(score_matrix).corr().values  # (5, 5)
 
     logger.info(
         "Baseline correlations (n=%d): mean |r|=%.3f, max |r|=%.3f",
@@ -265,13 +298,24 @@ def compute_baseline_sub_behavior_correlation_matrix(
             n_scores,
         )
 
-    score_matrix = np.zeros((n_scores, n_subs))
+    # Use NaN (not 0.0) for missing values so they don't bias correlations.
+    # 0.0 is a valid score (lowest observable), not "missing data".
+    score_matrix = np.full((n_scores, n_subs), np.nan)
     for i, score in enumerate(baseline_scores):
         flat = score.flat_sub_behavior_scores()
         for j, key in enumerate(SUB_BEHAVIOR_KEYS):
-            score_matrix[i, j] = flat.get(key, 0.0)
+            val = flat.get(key)
+            if val is not None:
+                score_matrix[i, j] = val
 
-    corr = np.corrcoef(score_matrix, rowvar=False)  # (15, 15)
+    # Drop rows that are entirely NaN before computing correlations.
+    valid_rows = ~np.all(np.isnan(score_matrix), axis=1)
+    score_matrix = score_matrix[valid_rows]
+
+    # Use pandas for NaN-aware pairwise Pearson correlation, consistent
+    # with the trait-level compute_baseline_correlation_matrix.
+    import pandas as pd
+    corr = pd.DataFrame(score_matrix).corr().values  # (15, 15)
 
     # Summarize within-trait vs cross-trait correlations
     within_mask = np.zeros((n_subs, n_subs), dtype=bool)

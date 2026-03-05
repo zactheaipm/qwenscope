@@ -106,13 +106,19 @@ def probability_of_superiority(group1: ArrayLike, group2: ArrayLike) -> float:
         logger.warning("Empty group(s) for probability_of_superiority")
         return 0.5
 
-    # Count pairs where g1 > g2, with ties counted as 0.5
-    wins = 0.0
-    total = len(g1) * len(g2)
-    for x in g1:
-        wins += np.sum(x > g2) + 0.5 * np.sum(x == g2)
+    # Strip NaN values (allows reuse from contexts with missing data)
+    g1 = g1[~np.isnan(g1)]
+    g2 = g2[~np.isnan(g2)]
+    if len(g1) == 0 or len(g2) == 0:
+        return 0.5
 
-    return float(wins / total)
+    # Vectorized pairwise comparison: O(n1*n2) memory but avoids Python loop
+    diff = g1[:, np.newaxis] - g2[np.newaxis, :]
+    n_total = diff.size
+    concordant = float(np.sum(diff > 0))
+    tied = float(np.sum(diff == 0))
+
+    return float((concordant + 0.5 * tied) / n_total)
 
 
 def bootstrap_ci(

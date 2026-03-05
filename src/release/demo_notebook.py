@@ -54,12 +54,13 @@ NOTEBOOK_CELLS = [
         "source": [
             "# Simple TopK SAE implementation\n",
             "class TopKSAE:\n",
-            "    def __init__(self, weights, k=64):\n",
+            "    def __init__(self, weights, k=None):\n",
             "        self.encoder_weight = weights['encoder.weight']\n",
             "        self.encoder_bias = weights['encoder.bias']\n",
             "        self.decoder_weight = weights['decoder.weight']\n",
             "        self.pre_bias = weights['pre_bias']\n",
-            "        self.k = k\n",
+            "        # Read k from config if not provided (SAEs use different k values)\n",
+            "        self.k = k if k is not None else config.get('k', config.get('topk', 64))\n",
             "    \n",
             "    def encode(self, x):\n",
             "        x_centered = x - self.pre_bias\n",
@@ -95,7 +96,7 @@ NOTEBOOK_CELLS = [
         "source": [
             "## Explore Feature Descriptions\n",
             "\n",
-            "Each SAE comes with auto-generated feature descriptions.\n",
+            "Feature descriptions may be included depending on the release configuration.\n",
         ],
     },
     {

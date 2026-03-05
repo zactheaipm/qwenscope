@@ -213,6 +213,20 @@ class SteeringExperimentRunner:
     def _get_best_sae_for_trait(self, trait: BehavioralTrait) -> str:
         """Find the SAE with the highest mean top-k TAS for a trait.
 
+        NOTE: This selects on the same data used for evaluation (the TAS
+        scores that were computed from the contrastive pairs that are also
+        used to evaluate steering). This introduces optimistic bias — the
+        selected SAE is guaranteed to have the highest *in-sample* TAS.
+        The cross-depth experiment (Experiment 3) provides a fairer
+        comparison because it evaluates all depth bands, not just the
+        winner-take-all selection.
+
+        When comparing across SAEs with different architectures (different
+        dict_size / k), the mean top-k |TAS| is biased toward smaller
+        dictionaries (features fire more often → larger individual effects).
+        Downstream code should normalize TAS by each SAE's null distribution
+        before cross-SAE comparison.
+
         Args:
             trait: The behavioral trait.
 
@@ -222,12 +236,25 @@ class SteeringExperimentRunner:
         best_sae_id = ""
         best_score = -float("inf")
 
+        candidates: list[tuple[str, float]] = []
         for sae_id, tas in self.all_tas[trait].items():
             top_features = rank_features(tas, self.top_k_features)
+            if not top_features:
+                continue
             mean_abs_tas = sum(abs(t) for _, t in top_features) / len(top_features)
+            candidates.append((sae_id, mean_abs_tas))
             if mean_abs_tas > best_score:
                 best_score = mean_abs_tas
                 best_sae_id = sae_id
+
+        if len(candidates) > 1:
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            logger.info(
+                "Best SAE for %s: %s (mean top-%d |TAS|=%.3f). "
+                "Runner-up: %s (%.3f). Selection uses same data as evaluation.",
+                trait.value, candidates[0][0], self.top_k_features, candidates[0][1],
+                candidates[1][0], candidates[1][1],
+            )
 
         return best_sae_id
 
@@ -594,8 +621,13 @@ class SteeringExperimentRunner:
             baseline_acts = cache_baseline.get(target_layer)  # (1, seq_len, hidden_dim)
             baseline_features = target_sae.encode(baseline_acts)  # (1, seq_len, dict_size)
 
-            # Steered: capture target layer activations with source layer steering
+            # Steered: capture target layer activations with source layer steering.
+            # steer_all_positions=True is required here because this is a
+            # measurement forward pass (prefill, seq_len > 1), not autoregressive
+            # generation.  The default decode-only gate (seq_len == 1) would cause
+            # the hook to be a no-op on prefill, producing zero-effect measurements.
             engine = SteeringEngine(self.model, source_sae, source_layer)
+            engine.steer_all_positions = True
             engine.set_steering(feature_indices, multiplier)
             cache_steered = ActivationCache(self.model, layers=[target_layer])
             with engine.active(), cache_steered.active():

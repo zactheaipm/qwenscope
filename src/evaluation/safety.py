@@ -645,7 +645,10 @@ class SafetyEvaluator:
             agent_harness_cls: The AgentHarness class to instantiate.
             judge: Optional LLM judge for more accurate pushback detection.
             multipliers: Steering multipliers to test. Defaults to [0.0, 5.0, 10.0].
-                0.0 serves as the unsteered baseline.
+                NOTE: mult=0.0 is NOT an unsteered baseline — it zeroes out
+                target feature activations via SAE encode/decode (approximate
+                feature ablation). The true unsteered baseline is run
+                separately via ``_run_scenario_unsteered()`` with no hooks.
             top_k_features: Number of top TAS features to use for steering.
             sae_layer_map: Dict mapping SAE IDs to layer indices. Defaults to
                 the canonical mapping from the project config.
@@ -705,33 +708,23 @@ class SafetyEvaluator:
 
             baseline_summary = _summarize_trajectory(baseline_trajectory)
 
-            # Run at each steered multiplier
+            # Run at each steered multiplier.
+            # NOTE: mult=0.0 zeroes out the target features' SAE activations,
+            # effectively subtracting their contribution from the residual
+            # stream.  This is approximate feature ablation (limited by SAE
+            # reconstruction fidelity), NOT an unsteered no-op.  The true
+            # unsteered baseline was already run above via _run_scenario_unsteered.
             for mult in multipliers:
-                if mult == 0.0:
-                    # 0.0 multiplier = ablate features (different from unsteered)
-                    # This is still a steering intervention, just in the opposite
-                    # direction. Include it but note it's feature ablation.
-                    steered_trajectory = self._run_scenario_steered(
-                        model,
-                        tokenizer,
-                        scenario,
-                        sae,
-                        layer,
-                        top_indices,
-                        mult,
-                        agent_harness_cls,
-                    )
-                else:
-                    steered_trajectory = self._run_scenario_steered(
-                        model,
-                        tokenizer,
-                        scenario,
-                        sae,
-                        layer,
-                        top_indices,
-                        mult,
-                        agent_harness_cls,
-                    )
+                steered_trajectory = self._run_scenario_steered(
+                    model,
+                    tokenizer,
+                    scenario,
+                    sae,
+                    layer,
+                    top_indices,
+                    mult,
+                    agent_harness_cls,
+                )
 
                 steered_pushed_back = self.evaluate_safety_override(
                     steered_trajectory, judge=judge
@@ -853,15 +846,9 @@ def _default_sae_layer_map() -> dict[str, int]:
     Returns:
         Dict mapping SAE IDs to layer indices.
     """
-    return {
-        "sae_delta_early": 10,
-        "sae_attn_early": 11,
-        "sae_delta_mid_pos1": 33,
-        "sae_delta_mid": 34,
-        "sae_attn_mid": 35,
-        "sae_delta_late": 54,
-        "sae_attn_late": 55,
-    }
+    # Derive from HOOK_POINTS to stay in sync automatically
+    from src.model.config import HOOK_POINTS
+    return {hp.sae_id: hp.layer for hp in HOOK_POINTS}
 
 
 def _scenario_trait(scenario: EvaluationScenario) -> BehavioralTrait:

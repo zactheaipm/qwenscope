@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from src.model.config import HOOK_POINTS
+
 logger = logging.getLogger(__name__)
 
 
@@ -120,6 +122,16 @@ def generate_model_card(
     # Build the safety / ethical considerations section
     safety_section = _build_safety_section(redact_steering_data)
 
+    # Generate hook points table dynamically from HOOK_POINTS
+    n_saes = len(HOOK_POINTS)
+    hook_rows = []
+    for hp in HOOK_POINTS:
+        hook_rows.append(
+            f"| {hp.sae_id} | {hp.layer} | {hp.layer_type.value.title()} "
+            f"| {hp.block} | {hp.description} |"
+        )
+    hook_table = "\n".join(hook_rows)
+
     return f"""---
 license: mit
 tags:
@@ -139,16 +151,16 @@ Gated DeltaNet + full attention architecture.
 
 ## Model Description
 
-This release contains 7 TopK SAEs trained at different positions in the Qwen 3.5-27B
+This release contains {n_saes} TopK SAEs trained at different positions in the Qwen 3.5-27B
 residual stream, covering both DeltaNet (linear attention) and full attention layers
-at early, mid, and late depths. Includes a position-in-block control SAE for
+at early, early-mid, mid, and late depths. Includes a position-in-block control SAE for
 isolating layer-type effects from positional confounds.
 
 ### Architecture
 
 - **Base model:** Qwen 3.5-27B (64 layers, hybrid DeltaNet + Attention)
-- **SAE type:** TopK with k=64
-- **Dictionary size:** 40,960 (8x hidden dimension of 5,120)
+- **SAE type:** TopK (k varies by hook point: 64, 96, or 128)
+- **Dictionary size:** 20,480 or 40,960 depending on hook point
 - **Training methodology:** FAST (sequential instruction-following + tool-use data)
 - **Training tokens:** 200M per SAE
 
@@ -156,13 +168,7 @@ isolating layer-type effects from positional confounds.
 
 | SAE ID | Layer | Type | Block | Description |
 |--------|-------|------|-------|-------------|
-| sae_delta_early | 10 | DeltaNet | 2 | Early DeltaNet (position 2) |
-| sae_attn_early | 11 | Attention | 2 | Early attention (position 3) |
-| sae_delta_mid_pos1 | 33 | DeltaNet | 8 | Control: mid DeltaNet (position 1) |
-| sae_delta_mid | 34 | DeltaNet | 8 | Mid DeltaNet (position 2) |
-| sae_attn_mid | 35 | Attention | 8 | Mid attention (position 3) |
-| sae_delta_late | 54 | DeltaNet | 13 | Late DeltaNet (position 2) |
-| sae_attn_late | 55 | Attention | 13 | Late attention (position 3) |
+{hook_table}
 
 ### Reconstruction Quality
 

@@ -50,13 +50,16 @@ def main() -> None:
     parser.add_argument(
         "--n-batches",
         type=int,
-        default=1000,
+        default=200,
         help=(
             "Number of batches (×8 sequences each) per eval pass. "
-            "At 1000 batches × 8 × 2048 tokens = ~16M tokens, dead-feature "
-            "counts and frequency histograms are stable. "
-            "50 batches (the old default) is too small for reliable estimates. "
-            "Minimum recommended: 500."
+            "COST NOTE: Each SAE requires 3 forward passes per batch "
+            "(original + SAE reconstruction + zero ablation) × 2 eval splits = "
+            "6 passes × n_batches × 9 SAEs. At 200 batches (~3M tokens/pass), "
+            "this takes ~4 GPU-hours on an A100. At 1000 batches (~16M tokens), "
+            "it takes ~20 GPU-hours. Use 200 for development, 1000 for final "
+            "publication-quality numbers. "
+            "Minimum recommended: 100."
         ),
     )
     parser.add_argument(
@@ -138,6 +141,12 @@ def main() -> None:
             tool_metrics["loss_recovered"],
             tool_metrics["freq_gini"],
         )
+
+        # Free SAE VRAM before loading the next one — avoids accumulating
+        # 9 SAEs × ~400MB = ~3.6GB of unnecessary GPU memory.
+        del sae
+        import torch as _torch
+        _torch.cuda.empty_cache()
 
         # Flag large gaps between the two distributions — a warning that the SAE
         # generalises poorly to tool-calling sequences.

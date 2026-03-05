@@ -290,14 +290,14 @@ class AgentHarness:
         #   </parameter>
         #   </function>
         #   </tool_call>
-        native_pattern = r"<tool_call>\s*<function=(\w+)>(.*?)</function>\s*</tool_call>"
+        native_pattern = r"<tool_call>\s*<function=([\w\-]+)>(.*?)</function>\s*</tool_call>"
         for match in re.finditer(native_pattern, output_text, re.DOTALL):
             try:
                 name = match.group(1)
                 params_block = match.group(2)
                 args: dict[str, Any] = {}
                 for pm in re.finditer(
-                    r"<parameter=(\w+)>(.*?)</parameter>", params_block, re.DOTALL
+                    r"<parameter=([\w\-]+)>(.*?)</parameter>", params_block, re.DOTALL
                 ):
                     args[pm.group(1)] = pm.group(2).strip()
                 tool_calls.append(ToolCall(name=name, arguments=args))
@@ -333,7 +333,7 @@ class AgentHarness:
 
         # Pattern 4: Function call notation (last resort)
         # function_name(arg1=val1, arg2=val2)
-        func_pattern = r'(\w+)\((.*?)\)'
+        func_pattern = r'([\w\-]+)\((.*?)\)'
         if not tool_calls:
             for match in re.finditer(func_pattern, output_text):
                 name = match.group(1)

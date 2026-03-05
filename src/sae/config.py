@@ -35,6 +35,9 @@ class SAETrainingConfig(BaseModel):
     # ~9 resampling opportunities vs. only ~1 at the old 25,000-step default.
     resample_every_n_steps: int = 5_000
 
+    # Maximum sequence length for tokenization and packing.
+    max_seq_length: int = 2048
+
     # Hook point for this SAE
     layer: int = 0
     layer_type: LayerType = LayerType.DELTANET
@@ -55,18 +58,36 @@ class SAETrainingConfig(BaseModel):
             data = yaml.safe_load(f)
 
         hook_point = data["hook_points"][sae_id]
+
+        # Per-hook overrides: any top-level key can be overridden inside
+        # the hook_point block (e.g., topk, dictionary_size, resample_every_n_steps).
+        def _get(key: str, default):
+            return hook_point.get(key, data.get(key, default))
+
+        # Load hidden_dim from model.yaml if it exists, otherwise fall back
+        # to the default. This prevents silent dimension mismatch if the model
+        # changes from Qwen 3.5-27B (hidden_dim=5120) to another architecture.
+        model_yaml = path.parent / "model.yaml"
+        default_hidden_dim = 5120
+        if model_yaml.exists():
+            with open(model_yaml) as mf:
+                model_data = yaml.safe_load(mf)
+            default_hidden_dim = model_data.get("hidden_dim", default_hidden_dim)
+
         return cls(
-            sae_type=data.get("sae_type", "topk"),
-            dictionary_size=data.get("dictionary_size", 40960),
-            topk=data.get("topk", 64),
-            learning_rate=data.get("learning_rate", 5e-5),
-            lr_warmup_steps=data.get("lr_warmup_steps", 1000),
-            batch_size=data.get("batch_size", 4096),
-            training_tokens=data.get("training_tokens", 200_000_000),
-            checkpoint_every_tokens=data.get("checkpoint_every_tokens", 50_000_000),
-            seed=data.get("seed", 42),
-            buffer_capacity=data.get("buffer_capacity", 500_000),
-            resample_every_n_steps=data.get("resample_every_n_steps", 5_000),
+            sae_type=_get("sae_type", "topk"),
+            hidden_dim=_get("hidden_dim", default_hidden_dim),
+            dictionary_size=_get("dictionary_size", 40960),
+            topk=_get("topk", 64),
+            learning_rate=_get("learning_rate", 5e-5),
+            lr_warmup_steps=_get("lr_warmup_steps", 1000),
+            batch_size=_get("batch_size", 4096),
+            training_tokens=_get("training_tokens", 200_000_000),
+            checkpoint_every_tokens=_get("checkpoint_every_tokens", 50_000_000),
+            seed=_get("seed", 42),
+            buffer_capacity=_get("buffer_capacity", 500_000),
+            resample_every_n_steps=_get("resample_every_n_steps", 5_000),
+            max_seq_length=_get("max_seq_length", 2048),
             layer=hook_point["layer"],
             layer_type=LayerType(hook_point["type"]),
             sae_id=sae_id,

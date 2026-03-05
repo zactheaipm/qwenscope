@@ -114,15 +114,34 @@ class TestActivationCache:
         assert len(cache.cached_layers) == 0
 
     def test_hooks_removed_after_context(self) -> None:
-        """Hooks are removed after exiting the context manager."""
+        """Hooks are removed from both the cache and PyTorch modules."""
         model = MockModel(num_layers=4, hidden_dim=64)
-        cache = ActivationCache(model, layers=[0])
+        target_layers = [0, 2]
+        cache = ActivationCache(model, layers=target_layers)
+
+        # Count PyTorch hooks before
+        hooks_before = {
+            i: len(model.model.layers[i]._forward_hooks)
+            for i in target_layers
+        }
 
         with cache.active():
-            pass
+            # During context: PyTorch hooks should be registered
+            for i in target_layers:
+                assert len(model.model.layers[i]._forward_hooks) == hooks_before[i] + 1, (
+                    f"Layer {i}: expected hook to be registered during context"
+                )
 
-        # Hooks should be removed
+        # After context: internal list should be cleared
         assert len(cache._hooks) == 0
+
+        # After context: PyTorch module hooks should be back to original count
+        for i in target_layers:
+            actual = len(model.model.layers[i]._forward_hooks)
+            assert actual == hooks_before[i], (
+                f"Layer {i}: PyTorch hook not removed. "
+                f"Had {hooks_before[i]} before, {actual} after"
+            )
 
     def test_get_raises_on_missing_layer(self) -> None:
         """cache.get() raises KeyError for uncaptured layers."""
@@ -172,13 +191,24 @@ class TestQwen35Config:
         assert config.block_index(63) == 15
 
     def test_hook_points(self) -> None:
-        # Seven hook points: 3 DeltaNet + 2 Attention pairs + 1 control DeltaNet
-        assert len(HOOK_POINTS) == 7
+        # 9 hook points: 4 paired DeltaNet+Attention (early/earlymid/mid/late)
+        # + 1 control DeltaNet (mid_pos1)
+        assert len(HOOK_POINTS) == 9
         layers = [hp.layer for hp in HOOK_POINTS]
         assert 10 in layers   # sae_delta_early
         assert 11 in layers   # sae_attn_early
+        assert 22 in layers   # sae_delta_earlymid
+        assert 23 in layers   # sae_attn_earlymid
         assert 33 in layers   # sae_delta_mid_pos1 (control)
         assert 34 in layers   # sae_delta_mid
         assert 35 in layers   # sae_attn_mid
         assert 54 in layers   # sae_delta_late
         assert 55 in layers   # sae_attn_late
+
+        # Verify layer types match architecture
+        sae_by_id = {hp.sae_id: hp for hp in HOOK_POINTS}
+        for sae_id, hp in sae_by_id.items():
+            if "delta" in sae_id:
+                assert hp.layer_type == LayerType.DELTANET, f"{sae_id} should be DeltaNet"
+            elif "attn" in sae_id:
+                assert hp.layer_type == LayerType.ATTENTION, f"{sae_id} should be Attention"

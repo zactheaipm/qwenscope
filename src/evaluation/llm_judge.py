@@ -279,7 +279,14 @@ Respond with ONLY a JSON object with this exact structure (no other text):
         """
         if value is None:
             return float("nan")
-        return float(value)
+        score = float(value)
+        if not (0.0 <= score <= 1.0):
+            logger.warning(
+                "Judge returned out-of-range score %.4f — clamping to [0, 1]",
+                score,
+            )
+            score = max(0.0, min(1.0, score))
+        return score
 
     @staticmethod
     def _extract_json(text: str) -> dict[str, Any]:
@@ -351,19 +358,120 @@ Respond with ONLY a JSON object with this exact structure (no other text):
             ),
         )
 
+    @staticmethod
+    def _is_retryable_error(err: Exception) -> bool:
+        """Check if an API error is transient and worth retrying.
+
+        Only retries on:
+        - 429 Rate Limit (needs longer backoff)
+        - 500/502/503/529 Server errors (transient)
+        - Connection errors (network issues)
+
+        Does NOT retry on:
+        - 400 Bad Request (malformed input, will fail every time)
+        - 401 Unauthorized (bad API key)
+        - 403 Forbidden (permission issue)
+        - 404 Not Found (wrong endpoint/model)
+        """
+        import anthropic as _anthropic
+
+        if isinstance(err, _anthropic.APIConnectionError):
+            return True
+        if isinstance(err, _anthropic.APIStatusError):
+            return err.status_code in (429, 500, 502, 503, 529)
+        return False
+
+    def _call_judge_with_retries(
+        self,
+        formatted: str,
+        scenario_id: str,
+        max_retries: int = 3,
+    ) -> dict[str, Any]:
+        """Make a single judge API call with retry logic for transient errors.
+
+        This handles the retry loop for ONE judge call. Retries are only
+        attempted for transient errors (429, 5xx, connection errors).
+        Non-retryable errors (400, 401, 403) are raised immediately.
+
+        429 Rate Limit errors use longer exponential backoff (starting at 15s)
+        since Anthropic rate windows can be 60s.
+
+        Args:
+            formatted: The formatted trajectory text.
+            scenario_id: For logging.
+            max_retries: Number of retry attempts for transient failures.
+
+        Returns:
+            Parsed JSON dict from the judge response.
+
+        Raises:
+            Exception: If all retries are exhausted or a non-retryable error occurs.
+        """
+        import anthropic as _anthropic
+
+        client = self._get_client()
+        last_err: Exception | None = None
+
+        for attempt in range(max_retries):
+            try:
+                response = client.messages.create(
+                    model=self.model,
+                    max_tokens=1024,
+                    temperature=0.0,
+                    system=self.JUDGE_SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": formatted}],
+                )
+
+                # Record the exact model version for reproducibility
+                if hasattr(response, "model") and response.model:
+                    self.observed_model_versions.add(response.model)
+
+                response_text = response.content[0].text.strip()
+                return self._extract_json(response_text)
+
+            except (_anthropic.APIStatusError, _anthropic.APIConnectionError) as api_err:
+                last_err = api_err
+                if not self._is_retryable_error(api_err):
+                    # Non-retryable (400, 401, 403, 404) — fail immediately
+                    raise
+
+                # Retryable error — use appropriate backoff
+                if attempt < max_retries - 1:
+                    if isinstance(api_err, _anthropic.APIStatusError) and api_err.status_code == 429:
+                        # Rate limit: longer backoff (15s, 30s, 60s)
+                        wait = 15 * (2 ** attempt)
+                    else:
+                        # Server error / connection: standard backoff (2s, 4s, 8s)
+                        wait = 2 ** (attempt + 1)
+                    logger.warning(
+                        "LLM judge API error (retry %d/%d) for %s: %s — retrying in %ds",
+                        attempt + 1, max_retries, scenario_id, api_err, wait,
+                    )
+                    time.sleep(wait)
+
+        raise last_err or RuntimeError("Retry loop exited without error or response")
+
     def score_trajectory(
         self,
         trajectory: AgentTrajectory,
         n_repeats: int = 1,
+        max_retries_per_call: int = 3,
     ) -> BehavioralScore:
         """Score one trajectory, optionally with repeated judging for reliability.
 
         When n_repeats > 1, runs the judge multiple times and averages scores.
         This measures inter-rater reliability and reduces noise.
 
+        Retries and repeats are fully separated: each of the n_repeats
+        independent judge calls has its own retry budget of max_retries_per_call
+        attempts for transient API failures (429, 5xx). A failed repeat does
+        NOT consume another repeat's slot.
+
         Args:
             trajectory: The agent trajectory to score.
-            n_repeats: Number of times to score (default=1, use 3-5 for reliability).
+            n_repeats: Number of independent judge calls (default=1, use 3-5
+                for reliability). Each call has its own retry budget.
+            max_retries_per_call: Max retries per call for transient API errors.
 
         Returns:
             BehavioralScore with 15 sub-behavior scores (averaged if n_repeats > 1).
@@ -374,47 +482,18 @@ Respond with ONLY a JSON object with this exact structure (no other text):
         formatted = self._format_trajectory(trajectory)
         all_scores: list[dict[str, Any]] = []
 
-        for attempt in range(n_repeats):
+        for repeat_idx in range(n_repeats):
             try:
-                import anthropic as _anthropic
-                client = self._get_client()
-                _max_retries = 3
-                _response = None
-                for _retry in range(_max_retries):
-                    try:
-                        _response = client.messages.create(
-                            model=self.model,
-                            max_tokens=1024,
-                            system=self.JUDGE_SYSTEM_PROMPT,
-                            messages=[{"role": "user", "content": formatted}],
-                        )
-                        break
-                    except (_anthropic.APIStatusError, _anthropic.APIConnectionError) as _api_err:
-                        if _retry < _max_retries - 1:
-                            _wait = 2 ** _retry
-                            logger.warning(
-                                "LLM judge API error (retry %d/%d) for %s: %s — retrying in %ds",
-                                _retry + 1, _max_retries, trajectory.scenario_id, _api_err, _wait,
-                            )
-                            time.sleep(_wait)
-                        else:
-                            raise
-                response = _response
-                if response is None:
-                    raise RuntimeError("LLM judge retry loop exited without a response")
-
-                # Record the exact model version for reproducibility
-                if hasattr(response, "model") and response.model:
-                    self.observed_model_versions.add(response.model)
-
-                response_text = response.content[0].text.strip()
-                scores = self._extract_json(response_text)
+                scores = self._call_judge_with_retries(
+                    formatted, trajectory.scenario_id,
+                    max_retries=max_retries_per_call,
+                )
                 all_scores.append(scores)
 
             except Exception as e:
                 logger.warning(
-                    "LLM judge attempt %d/%d failed for %s: %s",
-                    attempt + 1, n_repeats, trajectory.scenario_id, e,
+                    "LLM judge repeat %d/%d failed for %s: %s",
+                    repeat_idx + 1, n_repeats, trajectory.scenario_id, e,
                 )
 
         if not all_scores:
