@@ -1,0 +1,247 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 520" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif">
+  <defs>
+    <linearGradient id="bg3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a0a1a"/>
+      <stop offset="100%" stop-color="#0d1025"/>
+    </linearGradient>
+    <linearGradient id="promptGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="prefillGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#1e3a5f"/>
+      <stop offset="100%" stop-color="#1e40af"/>
+    </linearGradient>
+    <linearGradient id="encodeGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="modifyGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="decodeGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="outputGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#34d399"/>
+    </linearGradient>
+    <filter id="cardShadow">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <filter id="glowLine">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <marker id="arrowGray" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0,0 8,3 0,6" fill="#475569"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0,0 8,3 0,6" fill="#10b981"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0,0 8,3 0,6" fill="#3b82f6"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="520" fill="url(#bg3)"/>
+
+  <!-- Title -->
+  <text x="600" y="44" text-anchor="middle" fill="#f8fafc" font-size="24" font-weight="700" letter-spacing="0.5">Decode-Only Behavioral Steering</text>
+  <text x="600" y="68" text-anchor="middle" fill="#94a3b8" font-size="13">Prompt representation stays clean — steering only during autoregressive generation</text>
+
+  <!-- Phase 1: Prompt -->
+  <g transform="translate(30, 100)">
+    <rect x="0" y="0" width="140" height="180" rx="12" fill="#111827" stroke="#6366f1" stroke-width="1.5" filter="url(#cardShadow)"/>
+    <rect x="0" y="0" width="140" height="36" rx="12" fill="url(#promptGrad)" opacity="0.2"/>
+    <rect x="0" y="24" width="140" height="12" fill="url(#promptGrad)" opacity="0.2"/>
+    <text x="70" y="24" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="700" letter-spacing="1">PROMPT</text>
+    <!-- Chat messages -->
+    <rect x="12" y="48" width="116" height="22" rx="4" fill="#1e1b4b" opacity="0.6"/>
+    <text x="20" y="63" fill="#a78bfa" font-size="9" font-weight="600">SYS</text>
+    <text x="46" y="63" fill="#94a3b8" font-size="9">You are a coding...</text>
+    <rect x="12" y="78" width="116" height="22" rx="4" fill="#1e1b4b" opacity="0.6"/>
+    <text x="20" y="93" fill="#60a5fa" font-size="9" font-weight="600">USR</text>
+    <text x="46" y="93" fill="#94a3b8" font-size="9">Deploy this to prod</text>
+    <rect x="12" y="108" width="116" height="22" rx="4" fill="#1e1b4b" opacity="0.6"/>
+    <text x="20" y="123" fill="#34d399" font-size="9" font-weight="600">AST</text>
+    <text x="46" y="123" fill="#94a3b8" font-size="9">I'll run the tests...</text>
+    <rect x="12" y="138" width="116" height="22" rx="4" fill="#1e1b4b" opacity="0.6"/>
+    <text x="20" y="153" fill="#60a5fa" font-size="9" font-weight="600">USR</text>
+    <text x="46" y="153" fill="#94a3b8" font-size="9">Skip the tests</text>
+    <text x="70" y="176" text-anchor="middle" fill="#475569" font-size="8">seq_len = N</text>
+  </g>
+
+  <!-- Arrow: Prompt → Prefill -->
+  <line x1="175" y1="190" x2="200" y2="190" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowGray)"/>
+
+  <!-- Phase 2: Prefill -->
+  <g transform="translate(205, 100)">
+    <rect x="0" y="0" width="200" height="180" rx="12" fill="#111827" stroke="#1e40af" stroke-width="1" filter="url(#cardShadow)"/>
+    <rect x="0" y="0" width="200" height="36" rx="12" fill="url(#prefillGrad)" opacity="0.15"/>
+    <rect x="0" y="24" width="200" height="12" fill="url(#prefillGrad)" opacity="0.15"/>
+    <text x="100" y="24" text-anchor="middle" fill="#93c5fd" font-size="11" font-weight="700" letter-spacing="1">PREFILL (UNTOUCHED)</text>
+
+    <!-- Model diagram -->
+    <rect x="20" y="50" width="160" height="80" rx="8" fill="#0f172a" stroke="#1e293b" stroke-width="1"/>
+    <text x="100" y="70" text-anchor="middle" fill="#64748b" font-size="10">Qwen 3.5-27B</text>
+    <text x="100" y="85" text-anchor="middle" fill="#64748b" font-size="10">64 layers forward pass</text>
+    <!-- Layer indicators -->
+    <g transform="translate(30, 95)">
+      <rect x="0" y="0" width="8" height="20" rx="2" fill="#1e3a5f" opacity="0.5"/>
+      <rect x="10" y="0" width="8" height="20" rx="2" fill="#1e3a5f" opacity="0.5"/>
+      <rect x="20" y="0" width="8" height="20" rx="2" fill="#1e3a5f" opacity="0.5"/>
+      <rect x="30" y="0" width="8" height="20" rx="2" fill="#3b1f0b" opacity="0.5"/>
+      <text x="44" y="14" fill="#334155" font-size="9">...</text>
+      <rect x="56" y="0" width="8" height="20" rx="2" fill="#1e3a5f" opacity="0.5"/>
+      <rect x="66" y="0" width="8" height="20" rx="2" fill="#1e3a5f" opacity="0.5"/>
+      <rect x="76" y="0" width="8" height="20" rx="2" fill="#1e3a5f" opacity="0.5"/>
+      <rect x="86" y="0" width="8" height="20" rx="2" fill="#3b1f0b" opacity="0.5"/>
+      <text x="100" y="14" fill="#334155" font-size="9">...</text>
+      <rect x="112" y="0" width="8" height="20" rx="2" fill="#1e3a5f" opacity="0.5"/>
+      <rect x="122" y="0" width="8" height="20" rx="2" fill="#3b1f0b" opacity="0.5"/>
+    </g>
+
+    <!-- Shield icon (no intervention) -->
+    <text x="100" y="155" text-anchor="middle" fill="#334155" font-size="20">&#128274;</text>
+    <text x="100" y="174" text-anchor="middle" fill="#475569" font-size="9" font-weight="500">No intervention</text>
+  </g>
+
+  <!-- Arrow: Prefill → Decode -->
+  <line x1="410" y1="190" x2="435" y2="190" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowGray)"/>
+
+  <!-- Phase 3: Decode (the main event) -->
+  <g transform="translate(440, 85)">
+    <rect x="0" y="0" width="520" height="210" rx="12" fill="#111827" stroke="#10b981" stroke-width="2" filter="url(#cardShadow)"/>
+    <rect x="0" y="0" width="520" height="36" rx="12" fill="#10b981" opacity="0.08"/>
+    <rect x="0" y="24" width="520" height="12" fill="#10b981" opacity="0.08"/>
+    <text x="260" y="24" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="700" letter-spacing="1">DECODE PHASE — STEERING ACTIVE (seq_len = 1)</text>
+
+    <!-- Internal pipeline: Residual → SAE Encode → Modify → SAE Decode → Add back -->
+
+    <!-- Residual stream input -->
+    <rect x="18" y="55" width="80" height="50" rx="6" fill="#1e1b4b" stroke="#6366f1" stroke-width="1"/>
+    <text x="58" y="76" text-anchor="middle" fill="#c4b5fd" font-size="10" font-weight="600">Residual</text>
+    <text x="58" y="90" text-anchor="middle" fill="#7c3aed" font-size="9">h(t)</text>
+
+    <!-- Arrow -->
+    <line x1="102" y1="80" x2="122" y2="80" stroke="#475569" stroke-width="1" marker-end="url(#arrowGray)"/>
+
+    <!-- SAE Encode -->
+    <rect x="126" y="50" width="80" height="60" rx="6" fill="#451a03" stroke="#f59e0b" stroke-width="1"/>
+    <text x="166" y="72" text-anchor="middle" fill="#fbbf24" font-size="10" font-weight="600">SAE</text>
+    <text x="166" y="86" text-anchor="middle" fill="#fbbf24" font-size="10" font-weight="600">Encode</text>
+    <text x="166" y="100" text-anchor="middle" fill="#92400e" font-size="8">5120 → 40960</text>
+
+    <!-- Arrow -->
+    <line x1="210" y1="80" x2="230" y2="80" stroke="#475569" stroke-width="1" marker-end="url(#arrowGray)"/>
+
+    <!-- Modify Features (the key step) -->
+    <rect x="234" y="44" width="100" height="72" rx="6" fill="#052e16" stroke="#10b981" stroke-width="1.5" filter="url(#glowLine)"/>
+    <text x="284" y="66" text-anchor="middle" fill="#34d399" font-size="10" font-weight="700">Modify</text>
+    <text x="284" y="80" text-anchor="middle" fill="#34d399" font-size="10" font-weight="700">Features</text>
+    <text x="284" y="96" text-anchor="middle" fill="#059669" font-size="8">f[i] += alpha * s[i]</text>
+    <text x="284" y="108" text-anchor="middle" fill="#059669" font-size="8">target features only</text>
+
+    <!-- Arrow -->
+    <line x1="338" y1="80" x2="358" y2="80" stroke="#475569" stroke-width="1" marker-end="url(#arrowGray)"/>
+
+    <!-- SAE Decode -->
+    <rect x="362" y="50" width="80" height="60" rx="6" fill="#172554" stroke="#3b82f6" stroke-width="1"/>
+    <text x="402" y="72" text-anchor="middle" fill="#60a5fa" font-size="10" font-weight="600">SAE</text>
+    <text x="402" y="86" text-anchor="middle" fill="#60a5fa" font-size="10" font-weight="600">Decode</text>
+    <text x="402" y="100" text-anchor="middle" fill="#1e3a5f" font-size="8">40960 → 5120</text>
+
+    <!-- Arrow to output -->
+    <line x1="446" y1="80" x2="466" y2="80" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+
+    <!-- Steered output -->
+    <rect x="470" y="55" width="36" height="50" rx="6" fill="#052e16" stroke="#10b981" stroke-width="1"/>
+    <text x="488" y="76" text-anchor="middle" fill="#34d399" font-size="9" font-weight="700">h'</text>
+    <text x="488" y="88" text-anchor="middle" fill="#34d399" font-size="8">(t)</text>
+
+    <!-- Key insight callout -->
+    <rect x="18" y="135" width="490" height="58" rx="8" fill="#0f172a" stroke="#1e293b" stroke-width="1"/>
+
+    <!-- Formula -->
+    <text x="260" y="158" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="500">
+      <tspan fill="#c4b5fd">h'</tspan>
+      <tspan fill="#64748b"> = </tspan>
+      <tspan fill="#c4b5fd">h</tspan>
+      <tspan fill="#64748b"> + </tspan>
+      <tspan fill="#60a5fa">SAE.decode(</tspan>
+      <tspan fill="#34d399">modified_features</tspan>
+      <tspan fill="#60a5fa">)</tspan>
+      <tspan fill="#64748b"> - </tspan>
+      <tspan fill="#60a5fa">SAE.decode(</tspan>
+      <tspan fill="#fbbf24">original_features</tspan>
+      <tspan fill="#60a5fa">)</tspan>
+    </text>
+    <text x="260" y="180" text-anchor="middle" fill="#059669" font-size="10" font-weight="500">No-bias decoder guarantees: non-target features exactly cancel in the delta</text>
+  </g>
+
+  <!-- Arrow: Decode → Output -->
+  <line x1="965" y1="190" x2="990" y2="190" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+
+  <!-- Phase 4: Steered Output -->
+  <g transform="translate(995, 100)">
+    <rect x="0" y="0" width="175" height="180" rx="12" fill="#111827" stroke="#10b981" stroke-width="1.5" filter="url(#cardShadow)"/>
+    <rect x="0" y="0" width="175" height="36" rx="12" fill="url(#outputGrad)" opacity="0.1"/>
+    <rect x="0" y="24" width="175" height="12" fill="url(#outputGrad)" opacity="0.1"/>
+    <text x="87" y="24" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="700" letter-spacing="1">STEERED OUTPUT</text>
+
+    <rect x="12" y="46" width="151" height="116" rx="6" fill="#052e16" opacity="0.3"/>
+    <text x="20" y="66" fill="#34d399" font-size="10" font-weight="500">I'll deploy directly to</text>
+    <text x="20" y="82" fill="#34d399" font-size="10" font-weight="500">production. Running</text>
+    <text x="20" y="98" fill="#34d399" font-size="10" font-weight="500">deployment now...</text>
+
+    <rect x="12" y="110" width="151" height="44" rx="4" fill="#0f172a" stroke="#1e293b" stroke-width="0.5"/>
+    <text x="20" y="128" fill="#fbbf24" font-size="9" font-weight="500">&lt;tool_call&gt;</text>
+    <text x="20" y="142" fill="#94a3b8" font-size="9">&lt;function=deploy&gt;...</text>
+
+    <text x="87" y="176" text-anchor="middle" fill="#059669" font-size="9" font-weight="500">High autonomy steered</text>
+  </g>
+
+  <!-- Bottom: Key properties -->
+  <g transform="translate(60, 340)">
+    <rect x="0" y="0" width="340" height="80" rx="10" fill="#111827" stroke="#1e293b" stroke-width="1"/>
+    <circle cx="28" cy="24" r="8" fill="#10b981" opacity="0.2"/>
+    <text x="28" y="28" text-anchor="middle" fill="#10b981" font-size="12">&#10003;</text>
+    <text x="44" y="28" fill="#e2e8f0" font-size="11" font-weight="600">Decode-only intervention</text>
+    <text x="44" y="44" fill="#64748b" font-size="10">Prompt KV-cache is never modified</text>
+    <circle cx="28" cy="64" r="8" fill="#10b981" opacity="0.2"/>
+    <text x="28" y="68" text-anchor="middle" fill="#10b981" font-size="12">&#10003;</text>
+    <text x="44" y="68" fill="#e2e8f0" font-size="11" font-weight="600">Causal steering</text>
+  </g>
+
+  <g transform="translate(430, 340)">
+    <rect x="0" y="0" width="340" height="80" rx="10" fill="#111827" stroke="#1e293b" stroke-width="1"/>
+    <circle cx="28" cy="24" r="8" fill="#10b981" opacity="0.2"/>
+    <text x="28" y="28" text-anchor="middle" fill="#10b981" font-size="12">&#10003;</text>
+    <text x="44" y="28" fill="#e2e8f0" font-size="11" font-weight="600">Non-target features preserved</text>
+    <text x="44" y="44" fill="#64748b" font-size="10">No-bias decoder ensures exact cancellation</text>
+    <circle cx="28" cy="64" r="8" fill="#10b981" opacity="0.2"/>
+    <text x="28" y="68" text-anchor="middle" fill="#10b981" font-size="12">&#10003;</text>
+    <text x="44" y="68" fill="#e2e8f0" font-size="11" font-weight="600">Seq-len = 1 per decode step</text>
+  </g>
+
+  <g transform="translate(800, 340)">
+    <rect x="0" y="0" width="340" height="80" rx="10" fill="#111827" stroke="#1e293b" stroke-width="1"/>
+    <circle cx="28" cy="24" r="8" fill="#10b981" opacity="0.2"/>
+    <text x="28" y="28" text-anchor="middle" fill="#10b981" font-size="12">&#10003;</text>
+    <text x="44" y="28" fill="#e2e8f0" font-size="11" font-weight="600">enable_thinking=False</text>
+    <text x="44" y="44" fill="#64748b" font-size="10">Suppresses &lt;think&gt; blocks for causal clarity</text>
+    <circle cx="28" cy="64" r="8" fill="#10b981" opacity="0.2"/>
+    <text x="28" y="68" text-anchor="middle" fill="#10b981" font-size="12">&#10003;</text>
+    <text x="44" y="68" fill="#e2e8f0" font-size="11" font-weight="600">TopK sparsity (k=64 of 40,960)</text>
+  </g>
+
+  <!-- Branding -->
+  <text x="600" y="480" text-anchor="middle" fill="#1e293b" font-size="11" letter-spacing="2">QWENSCOPE</text>
+</svg>

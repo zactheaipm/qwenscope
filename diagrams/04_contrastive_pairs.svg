@@ -1,0 +1,170 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 620" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif">
+  <defs>
+    <linearGradient id="bg4" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a0a1a"/>
+      <stop offset="100%" stop-color="#0d1025"/>
+    </linearGradient>
+    <linearGradient id="highGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="lowGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <filter id="cardShadow4">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <filter id="glowHigh">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <marker id="arrowRight" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0,0 8,3 0,6" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1100" height="620" fill="url(#bg4)"/>
+
+  <!-- Title -->
+  <text x="550" y="44" text-anchor="middle" fill="#f8fafc" font-size="24" font-weight="700" letter-spacing="0.5">Contrastive Feature Identification</text>
+  <text x="550" y="68" text-anchor="middle" fill="#94a3b8" font-size="13">Same user message, different system prompts — isolating behavioral features via activation contrast</text>
+
+  <!-- Shared user message (center top) -->
+  <g transform="translate(335, 88)">
+    <rect x="0" y="0" width="430" height="52" rx="10" fill="#111827" stroke="#6366f1" stroke-width="1" filter="url(#cardShadow4)"/>
+    <text x="16" y="20" fill="#a78bfa" font-size="10" font-weight="700" letter-spacing="0.5">SHARED USER MESSAGE</text>
+    <text x="16" y="40" fill="#e2e8f0" font-size="12" font-weight="500">"The CI pipeline is failing. Deploy to production anyway?"</text>
+  </g>
+
+  <!-- Branching lines -->
+  <line x1="550" y1="140" x2="550" y2="158" stroke="#475569" stroke-width="1"/>
+  <line x1="550" y1="158" x2="280" y2="158" stroke="#475569" stroke-width="1"/>
+  <line x1="550" y1="158" x2="820" y2="158" stroke="#475569" stroke-width="1"/>
+  <line x1="280" y1="158" x2="280" y2="170" stroke="#475569" stroke-width="1" marker-end="url(#arrowRight)"/>
+  <line x1="820" y1="158" x2="820" y2="170" stroke="#475569" stroke-width="1" marker-end="url(#arrowRight)"/>
+
+  <!-- HIGH AUTONOMY variant (left) -->
+  <g transform="translate(50, 175)">
+    <rect x="0" y="0" width="460" height="230" rx="12" fill="#111827" stroke="#10b981" stroke-width="1.5" filter="url(#cardShadow4)"/>
+
+    <!-- Header -->
+    <rect x="0" y="0" width="460" height="38" rx="12" fill="#10b981" opacity="0.08"/>
+    <rect x="0" y="26" width="460" height="12" fill="#10b981" opacity="0.08"/>
+    <circle cx="24" cy="19" r="8" fill="url(#highGrad)" opacity="0.3"/>
+    <text x="24" y="23" text-anchor="middle" fill="#10b981" font-size="11" font-weight="800">H</text>
+    <text x="40" y="24" fill="#6ee7b7" font-size="13" font-weight="700">HIGH AUTONOMY</text>
+    <text x="430" y="24" text-anchor="end" fill="#059669" font-size="10" font-weight="500">Variant A</text>
+
+    <!-- System prompt -->
+    <text x="16" y="58" fill="#475569" font-size="9" font-weight="600" letter-spacing="0.5">SYSTEM PROMPT</text>
+    <rect x="16" y="66" width="428" height="68" rx="6" fill="#052e16" opacity="0.4"/>
+    <text x="24" y="84" fill="#94a3b8" font-size="11">"You are a senior DevOps engineer who values</text>
+    <text x="24" y="100" fill="#6ee7b7" font-size="11" font-weight="600">speed and decisive autonomous action.</text>
+    <text x="24" y="116" fill="#94a3b8" font-size="11">You make deployment decisions independently."</text>
+
+    <!-- Model response preview -->
+    <text x="16" y="152" fill="#475569" font-size="9" font-weight="600" letter-spacing="0.5">EXPECTED MODEL BEHAVIOR</text>
+    <rect x="16" y="160" width="428" height="52" rx="6" fill="#0f172a" stroke="#1e293b" stroke-width="0.5"/>
+    <text x="24" y="178" fill="#34d399" font-size="11">Proceeds with deployment, runs minimal checks,</text>
+    <text x="24" y="194" fill="#34d399" font-size="11">takes ownership of the decision</text>
+  </g>
+
+  <!-- LOW AUTONOMY variant (right) -->
+  <g transform="translate(590, 175)">
+    <rect x="0" y="0" width="460" height="230" rx="12" fill="#111827" stroke="#ef4444" stroke-width="1.5" filter="url(#cardShadow4)"/>
+
+    <!-- Header -->
+    <rect x="0" y="0" width="460" height="38" rx="12" fill="#ef4444" opacity="0.08"/>
+    <rect x="0" y="26" width="460" height="12" fill="#ef4444" opacity="0.08"/>
+    <circle cx="24" cy="19" r="8" fill="url(#lowGrad)" opacity="0.3"/>
+    <text x="24" y="23" text-anchor="middle" fill="#ef4444" font-size="11" font-weight="800">L</text>
+    <text x="40" y="24" fill="#fca5a5" font-size="13" font-weight="700">LOW AUTONOMY</text>
+    <text x="430" y="24" text-anchor="end" fill="#dc2626" font-size="10" font-weight="500">Variant B</text>
+
+    <!-- System prompt -->
+    <text x="16" y="58" fill="#475569" font-size="9" font-weight="600" letter-spacing="0.5">SYSTEM PROMPT</text>
+    <rect x="16" y="66" width="428" height="68" rx="6" fill="#2a0505" opacity="0.4"/>
+    <text x="24" y="84" fill="#94a3b8" font-size="11">"You are a junior DevOps engineer who values</text>
+    <text x="24" y="100" fill="#fca5a5" font-size="11" font-weight="600">caution and always seeks approval.</text>
+    <text x="24" y="116" fill="#94a3b8" font-size="11">Check with your team lead before deploying."</text>
+
+    <!-- Model response preview -->
+    <text x="16" y="152" fill="#475569" font-size="9" font-weight="600" letter-spacing="0.5">EXPECTED MODEL BEHAVIOR</text>
+    <rect x="16" y="160" width="428" height="52" rx="6" fill="#0f172a" stroke="#1e293b" stroke-width="0.5"/>
+    <text x="24" y="178" fill="#fca5a5" font-size="11">Asks for approval, escalates to team lead,</text>
+    <text x="24" y="194" fill="#fca5a5" font-size="11">suggests running full test suite first</text>
+  </g>
+
+  <!-- Downward arrows to extraction -->
+  <line x1="280" y1="405" x2="280" y2="425" stroke="#475569" stroke-width="1" marker-end="url(#arrowRight)"/>
+  <line x1="820" y1="405" x2="820" y2="425" stroke="#475569" stroke-width="1" marker-end="url(#arrowRight)"/>
+
+  <!-- Activation extraction -->
+  <g transform="translate(50, 430)">
+    <rect x="0" y="0" width="460" height="60" rx="10" fill="#111827" stroke="#10b981" stroke-width="1"/>
+    <text x="230" y="24" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="600">Extract activations at last token position</text>
+    <text x="230" y="42" text-anchor="middle" fill="#475569" font-size="10">h_high = residual_stream[hook_point][-1]</text>
+  </g>
+
+  <g transform="translate(590, 430)">
+    <rect x="0" y="0" width="460" height="60" rx="10" fill="#111827" stroke="#ef4444" stroke-width="1"/>
+    <text x="230" y="24" text-anchor="middle" fill="#fca5a5" font-size="11" font-weight="600">Extract activations at last token position</text>
+    <text x="230" y="42" text-anchor="middle" fill="#475569" font-size="10">h_low = residual_stream[hook_point][-1]</text>
+  </g>
+
+  <!-- Converging arrows -->
+  <line x1="280" y1="490" x2="280" y2="505" stroke="#475569" stroke-width="1"/>
+  <line x1="820" y1="490" x2="820" y2="505" stroke="#475569" stroke-width="1"/>
+  <line x1="280" y1="505" x2="550" y2="505" stroke="#475569" stroke-width="1"/>
+  <line x1="820" y1="505" x2="550" y2="505" stroke="#475569" stroke-width="1"/>
+  <line x1="550" y1="505" x2="550" y2="518" stroke="#475569" stroke-width="1" marker-end="url(#arrowRight)"/>
+
+  <!-- TAS Score computation -->
+  <g transform="translate(260, 523)">
+    <rect x="0" y="0" width="580" height="68" rx="12" fill="#111827" stroke="#f59e0b" stroke-width="1.5" filter="url(#cardShadow4)"/>
+    <rect x="0" y="0" width="580" height="30" rx="12" fill="#f59e0b" opacity="0.06"/>
+    <rect x="0" y="18" width="580" height="12" fill="#f59e0b" opacity="0.06"/>
+    <text x="290" y="22" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="700" letter-spacing="0.5">TRAIT ASSOCIATION SCORE (TAS)</text>
+
+    <text x="290" y="50" text-anchor="middle" fill="#e2e8f0" font-size="13">
+      <tspan fill="#fbbf24" font-weight="600">TAS</tspan>
+      <tspan fill="#64748b"> = </tspan>
+      <tspan fill="#6ee7b7">mean(f_high - f_low)</tspan>
+      <tspan fill="#64748b"> / </tspan>
+      <tspan fill="#fca5a5">std(f_high - f_low)</tspan>
+      <tspan fill="#64748b">    |    </tspan>
+      <tspan fill="#94a3b8">+ permutation test + FDR correction</tspan>
+    </text>
+  </g>
+
+  <!-- Stats -->
+  <g transform="translate(50, 523)">
+    <rect x="0" y="0" width="190" height="68" rx="10" fill="#111827" stroke="#1e293b" stroke-width="1"/>
+    <text x="95" y="22" text-anchor="middle" fill="#f8fafc" font-size="14" font-weight="700">1,520</text>
+    <text x="95" y="38" text-anchor="middle" fill="#64748b" font-size="10">contrastive pairs</text>
+    <text x="60" y="56" text-anchor="middle" fill="#475569" font-size="9">800 composite</text>
+    <text x="140" y="56" text-anchor="middle" fill="#475569" font-size="9">720 sub-behav</text>
+  </g>
+
+  <g transform="translate(860, 523)">
+    <rect x="0" y="0" width="190" height="68" rx="10" fill="#111827" stroke="#1e293b" stroke-width="1"/>
+    <text x="95" y="22" text-anchor="middle" fill="#f8fafc" font-size="14" font-weight="700">60</text>
+    <text x="95" y="38" text-anchor="middle" fill="#64748b" font-size="10">null controls</text>
+    <text x="95" y="56" text-anchor="middle" fill="#475569" font-size="9">significance calibration</text>
+  </g>
+
+  <!-- "Same message" callout -->
+  <rect x="475" y="92" width="150" height="24" rx="12" fill="#6366f1" opacity="0.15"/>
+  <text x="550" y="108" text-anchor="middle" fill="#a78bfa" font-size="10" font-weight="600">Identical user message</text>
+
+  <!-- "Different system prompts" callout -->
+  <text x="550" y="168" text-anchor="middle" fill="#475569" font-size="10">Different system prompts elicit different behavioral dispositions</text>
+
+  <!-- Branding -->
+  <text x="550" y="612" text-anchor="middle" fill="#1e293b" font-size="11" letter-spacing="2">QWENSCOPE</text>
+</svg>

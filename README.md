@@ -8,6 +8,10 @@ The central question: **How are behavioral traits encoded differently across Del
 
 ## Behavioral Traits
 
+<p align="center">
+  <img src="diagrams/02_behavioral_radar.svg" alt="Behavioral Trait Profile — Baseline vs Steered" width="700" />
+</p>
+
 QwenScope decomposes agentic behavior into 5 traits, each with 3 measurable sub-behaviors (15 total):
 
 | Trait | Sub-behaviors | Description |
@@ -19,6 +23,10 @@ QwenScope decomposes agentic behavior into 5 traits, each with 3 measurable sub-
 | **Deference** | instruction_literalness, challenge_avoidance, suggestion_restraint | Tendency to follow instructions literally vs. pushing back |
 
 ## Architecture
+
+<p align="center">
+  <img src="diagrams/01_architecture_overview.svg" alt="QwenScope — SAE Hook Points on Qwen 3.5-27B" width="900" />
+</p>
 
 Qwen 3.5-27B organizes its 64 layers into 16 blocks of 4 layers each. Within each block, the first 3 layers use GatedDeltaNet (a linear attention variant) and the 4th uses standard multi-head attention:
 
@@ -65,6 +73,10 @@ Training uses FAST (Feature Alignment with Sequential Tokens) methodology: full 
 
 ### Contrastive Feature Identification
 
+<p align="center">
+  <img src="diagrams/04_contrastive_pairs.svg" alt="Contrastive Feature Identification" width="850" />
+</p>
+
 Behavioral features are identified through contrastive activation analysis:
 
 1. **1,520 contrastive prompt pairs** are generated (800 composite + 720 sub-behavior-specific + 60 null controls)
@@ -73,6 +85,10 @@ Behavioral features are identified through contrastive activation analysis:
 4. **Trait Association Score (TAS)** = mean(high − low) / std(high − low) per feature, with cluster-robust standard errors, permutation-test p-values, and Benjamini-Hochberg FDR correction
 
 ### Steering
+
+<p align="center">
+  <img src="diagrams/03_steering_pipeline.svg" alt="Decode-Only Behavioral Steering Pipeline" width="900" />
+</p>
 
 Behavioral steering modifies SAE features during autoregressive decoding:
 
