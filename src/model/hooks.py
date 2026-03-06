@@ -1,11 +1,13 @@
 """Forward hook registration for capturing residual stream activations.
 
 This is the most critical infrastructure module. Hooks are registered on
-model.model.layers[i] to capture the residual stream output (including skip
-connection) at arbitrary layers of the Qwen 3.5-27B hybrid architecture.
+the transformer decoder layers to capture the residual stream output
+(including skip connection) at arbitrary layers of the Qwen 3.5 hybrid
+architecture.
 
-The residual stream is 5120-dimensional at ALL layers regardless of whether
-the layer is DeltaNet or Attention.
+For Qwen 3.5-35B-A3B, the residual stream is 2048-dimensional at ALL
+layers regardless of whether the layer is DeltaNet or Attention, and
+regardless of which MoE experts were routed for that token.
 """
 
 from __future__ import annotations
@@ -16,6 +18,8 @@ from typing import Any
 
 import torch
 
+from src.model.loader import get_layers_module
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,20 +27,21 @@ class ActivationCache:
     """Captures residual stream activations at specified layers.
 
     Usage:
-        cache = ActivationCache(model, layers=[8, 11, 32, 35, 52, 55])
+        cache = ActivationCache(model, layers=[6, 7, 22, 23, 34, 35])
         with cache.active():
             output = model(**inputs)
-        acts = cache.get(32)  # shape: (batch, seq_len, 5120)
+        acts = cache.get(22)  # shape: (batch, seq_len, 2048)
     """
 
     def __init__(self, model: Any, layers: list[int]) -> None:
         """Initialize the activation cache.
 
         Args:
-            model: The HuggingFace model (must have model.model.layers attribute).
+            model: The HuggingFace model.
             layers: List of layer indices to capture activations from.
         """
         self._model = model
+        self._layers_module = get_layers_module(model)
         self._target_layers = set(layers)
         self._cache: dict[int, torch.Tensor] = {}
         self._hooks: list[torch.utils.hooks.RemovableHook] = []
@@ -69,7 +74,7 @@ class ActivationCache:
     def _register_hooks(self) -> None:
         """Register forward hooks on all target layers."""
         for layer_idx in sorted(self._target_layers):
-            layer_module = self._model.model.layers[layer_idx]
+            layer_module = self._layers_module[layer_idx]
             hook = layer_module.register_forward_hook(self._make_hook(layer_idx))
             self._hooks.append(hook)
         logger.debug("Registered %d activation hooks on layers %s", len(self._hooks), sorted(self._target_layers))

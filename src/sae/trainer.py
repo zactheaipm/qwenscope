@@ -136,9 +136,8 @@ class SAETrainer:
             aux_k_coeff: Coefficient for the aux-k dead-feature reconstruction loss
                 (Gao et al. 2024). Set to 0.0 to disable.
             buffer_capacity: Number of activation vectors in the circular buffer.
-                Defaults to config.buffer_capacity (500K). At hidden_dim=5120 BF16
-                this is ~5 GB CPU RAM and covers 0.25% of a 200M-token run.
-                The old hardcoded 100K only covered 0.05%.
+                Defaults to config.buffer_capacity (500K). At hidden_dim=2048 BF16
+                this is ~2 GB CPU RAM and covers 0.25% of a 200M-token run.
         """
         self.sae = sae
         self.config = config
@@ -169,9 +168,13 @@ class SAETrainer:
         self.scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, _lr_lambda)
 
         # Dead feature tracking
-        # Threshold lowered from 10K to 2K: features silent for ~8M tokens
-        # (2K × 4096 batch) are genuinely dead, not just temporarily inactive.
-        self._dead_feature_threshold = 2000
+        # 10K steps × 4096 batch = ~40M tokens of silence before a feature is
+        # considered dead. This is conservative enough to preserve rare-but-real
+        # features (e.g., firing 1-in-10M tokens) while still allowing ~4
+        # resampling events over a 200M-token run (resample_every=5K steps,
+        # first eligible at step 10K). Previous threshold of 2K (~8M tokens)
+        # was too aggressive and risked repeatedly killing interpretable features.
+        self._dead_feature_threshold = 10_000
         self._feature_activity = torch.zeros(config.dictionary_size, dtype=torch.long)
         self._steps_since_last_active = torch.zeros(config.dictionary_size, dtype=torch.long)
 
@@ -231,6 +234,8 @@ class SAETrainer:
             logger.info("WandB initialized: %s", run_name)
         except ImportError:
             logger.warning("wandb not installed, skipping logging")
+        except Exception as e:
+            logger.warning("WandB init failed: %s — training will continue without logging", e)
 
     def _save_training_state(self, ckpt_path: Path) -> None:
         """Save optimizer, scheduler, and training counters alongside SAE weights.
@@ -361,7 +366,9 @@ class SAETrainer:
                 _skip_tokens_remaining -= acts_batch.shape[0]
                 if _skip_tokens_remaining >= 0:
                     continue
-                # Passed the skip point — fall through to normal training.
+                # Boundary batch: discard the already-seen prefix, keep the rest.
+                acts_batch = acts_batch[acts_batch.shape[0] + _skip_tokens_remaining :]
+                _skip_tokens_remaining = 0
             if not _dtype_logged and acts_batch.dtype != sae_dtype:
                 logger.info(
                     "Activation dtype %s differs from SAE dtype %s — "

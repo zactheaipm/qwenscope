@@ -173,8 +173,11 @@ def main() -> None:
         "num_scored": sum(len(v) for v in all_scores.values()),
         "keys_scored": list(all_scores.keys()),
     }
-    with open(results_dir / "08_behavioral_scores.json", "w") as f:
+    scores_path = results_dir / "08_behavioral_scores.json"
+    tmp_path = scores_path.with_suffix(".json.tmp")
+    with open(tmp_path, "w") as f:
         json.dump({"manifest": manifest, "scores": all_scores}, f, indent=2)
+    tmp_path.rename(scores_path)  # atomic on POSIX
 
     logger.info("Behavioral evaluation complete! Scored %d total trajectories across %d experiment keys",
                 manifest["num_scored"], len(all_scores))

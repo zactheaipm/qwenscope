@@ -26,8 +26,8 @@ class TopKSAE(nn.Module):
 
     def __init__(
         self,
-        hidden_dim: int = 5120,
-        dict_size: int = 40960,
+        hidden_dim: int = 2048,
+        dict_size: int = 16384,
         k: int = 64,
     ) -> None:
         """Initialize the TopK SAE.

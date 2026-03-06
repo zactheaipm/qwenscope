@@ -96,7 +96,8 @@ def main() -> None:
         logger.info("Saving %d activation vectors to %s", combined.shape[0], output_path)
         save_file({"activations": combined}, str(output_path))
     else:
-        logger.warning("No activations extracted.")
+        logger.error("No activations extracted — aborting before writing manifest.")
+        raise RuntimeError("Activation extraction produced 0 tokens. Check data sources and stream configuration.")
 
     # Write manifest
     manifest = {

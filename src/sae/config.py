@@ -14,8 +14,8 @@ class SAETrainingConfig(BaseModel):
     """Configuration for SAE training."""
 
     sae_type: str = "topk"
-    hidden_dim: int = 5120
-    dictionary_size: int = 40960
+    hidden_dim: int = 2048
+    dictionary_size: int = 16384
     topk: int = 64
     learning_rate: float = 5e-5
     lr_warmup_steps: int = 1000
@@ -25,10 +25,10 @@ class SAETrainingConfig(BaseModel):
     seed: int = 42
 
     # Activation buffer capacity (number of vectors).
-    # Determines the effective shuffle window: 500K vectors × 5120 × 2 bytes ≈ 5 GB CPU RAM.
-    # Larger values give better mixing at the cost of RAM. 100K (the old default) only covered
-    # ~0.05% of the 200M-token training run; 500K raises that to ~0.25%.
-    buffer_capacity: int = 500_000
+    # Determines the effective shuffle window: 2M vectors × 2048 × 2 bytes ≈ 8 GB CPU RAM.
+    # Larger values give better mixing at the cost of RAM. Covers 1% of the 200M-token run,
+    # critical because WildChat/UltraChat are streamed in dataset order (not pre-shuffled).
+    buffer_capacity: int = 2_000_000
 
     # How often to check for and resample dead features (in optimizer steps).
     # With 200M tokens / 4096 batch ≈ 48,828 total steps, 5000-step intervals give
@@ -66,9 +66,9 @@ class SAETrainingConfig(BaseModel):
 
         # Load hidden_dim from model.yaml if it exists, otherwise fall back
         # to the default. This prevents silent dimension mismatch if the model
-        # changes from Qwen 3.5-27B (hidden_dim=5120) to another architecture.
+        # changes to another architecture.
         model_yaml = path.parent / "model.yaml"
-        default_hidden_dim = 5120
+        default_hidden_dim = 2048
         if model_yaml.exists():
             with open(model_yaml) as mf:
                 model_data = yaml.safe_load(mf)
@@ -77,7 +77,7 @@ class SAETrainingConfig(BaseModel):
         return cls(
             sae_type=_get("sae_type", "topk"),
             hidden_dim=_get("hidden_dim", default_hidden_dim),
-            dictionary_size=_get("dictionary_size", 40960),
+            dictionary_size=_get("dictionary_size", 16384),
             topk=_get("topk", 64),
             learning_rate=_get("learning_rate", 5e-5),
             lr_warmup_steps=_get("lr_warmup_steps", 1000),

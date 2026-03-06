@@ -18,6 +18,7 @@ from typing import Any
 
 import torch
 
+from src.model.loader import get_layers_module
 from src.sae.model import TopKSAE
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ class SteeringEngine:
         self.model = model
         self.sae = sae
         self.layer = layer
+        self._layers_module = get_layers_module(model)
         self._feature_indices: list[int] = []
         self._multiplier: float = 1.0
         # When True, steering fires at ALL sequence positions (not just
@@ -96,7 +98,7 @@ class SteeringEngine:
             with engine.active():
                 output = model.generate(**inputs)
         """
-        hook = self.model.model.layers[self.layer].register_forward_hook(
+        hook = self._layers_module[self.layer].register_forward_hook(
             self._steering_hook
         )
         try:
@@ -211,7 +213,7 @@ class MultiLayerSteeringEngine:
         """Context manager that activates all steering hooks."""
         hooks = []
         for engine in self._engines:
-            hook = engine.model.model.layers[engine.layer].register_forward_hook(
+            hook = engine._layers_module[engine.layer].register_forward_hook(
                 engine._steering_hook
             )
             hooks.append(hook)
@@ -269,6 +271,7 @@ class MeanDiffSteeringEngine:
         """
         self.model = model
         self.layer = layer
+        self._layers_module = get_layers_module(model)
         # Normalize to unit norm so that the multiplier controls
         # displacement magnitude in interpretable units, independent
         # of the absolute activation scale at this layer.
@@ -296,7 +299,7 @@ class MeanDiffSteeringEngine:
     @contextmanager
     def active(self):
         """Context manager that activates mean-diff steering."""
-        hook = self.model.model.layers[self.layer].register_forward_hook(
+        hook = self._layers_module[self.layer].register_forward_hook(
             self._steering_hook
         )
         try:

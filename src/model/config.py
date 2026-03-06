@@ -1,4 +1,4 @@
-"""Qwen 3.5-27B architecture constants and configuration."""
+"""Qwen 3.5-35B-A3B architecture constants and configuration."""
 
 from __future__ import annotations
 
@@ -27,20 +27,24 @@ class HookPoint(BaseModel):
 
 
 class Qwen35Config(BaseModel):
-    """Architecture constants for Qwen 3.5-27B.
+    """Architecture constants for Qwen 3.5-35B-A3B.
 
     The model uses a repeating 4-layer block pattern:
-      Block N (×16):
-        Layer 4N+0: Gated DeltaNet → FFN
-        Layer 4N+1: Gated DeltaNet → FFN
-        Layer 4N+2: Gated DeltaNet → FFN
-        Layer 4N+3: Gated Attention → FFN
+      Block N (x10):
+        Layer 4N+0: Gated DeltaNet -> MoE FFN
+        Layer 4N+1: Gated DeltaNet -> MoE FFN
+        Layer 4N+2: Gated DeltaNet -> MoE FFN
+        Layer 4N+3: Gated Attention -> MoE FFN
+
+    This is the same 3+1 pattern as Qwen 3.5-27B but with 10 blocks
+    instead of 16, hidden_dim=2048 instead of 5120, and MoE FFN at
+    every layer (256 experts, 8 routed + 1 shared per token).
     """
 
-    hidden_dim: int = 5120
-    num_layers: int = 64
+    hidden_dim: int = 2048
+    num_layers: int = 40
     block_size: int = 4
-    num_blocks: int = 16
+    num_blocks: int = 10
     context_length: int = 4096
 
     def layer_type(self, layer_idx: int) -> LayerType:
@@ -48,11 +52,11 @@ class Qwen35Config(BaseModel):
         return LayerType.ATTENTION if (layer_idx % 4) == 3 else LayerType.DELTANET
 
     def deltanet_layers(self) -> list[int]:
-        """Return indices of all DeltaNet layers (48 total)."""
+        """Return indices of all DeltaNet layers (30 total)."""
         return [i for i in range(self.num_layers) if self.layer_type(i) == LayerType.DELTANET]
 
     def attention_layers(self) -> list[int]:
-        """Return indices of all attention layers (16 total)."""
+        """Return indices of all attention layers (10 total)."""
         return [i for i in range(self.num_layers) if self.layer_type(i) == LayerType.ATTENTION]
 
     def block_index(self, layer_idx: int) -> int:
@@ -70,77 +74,80 @@ class Qwen35Config(BaseModel):
 # early/early-mid/mid/late depths for clean layer-type comparison.
 #
 # 1 control SAE: DeltaNet at position 1 (mid block) to test whether position
-# within the 3-DeltaNet sequence matters independently of layer type. If
-# features at position 1 and position 2 are similar, position doesn't matter
-# and DeltaNet vs attention is the primary factor. If they differ, position
-# within the block is a confound that must be reported.
+# within the 3-DeltaNet sequence matters independently of layer type.
+#
+# Hook point selection for 10-block A3B (layers 0-39):
+#   Early:     block 1  (layers 4-7)   — ~15% depth
+#   Early-mid: block 3  (layers 12-15) — ~35% depth
+#   Mid:       block 5  (layers 20-23) — ~55% depth
+#   Late:      block 8  (layers 32-35) — ~85% depth
 HOOK_POINTS: list[HookPoint] = [
-    # --- Early (block 2) ---
+    # --- Early (block 1) ---
     HookPoint(
         sae_id="sae_delta_early",
-        layer=10,
+        layer=6,
         layer_type=LayerType.DELTANET,
-        block=2,
-        description="Post-DeltaNet (position 2 of block 2, last DeltaNet before attention)",
+        block=1,
+        description="Post-DeltaNet (position 2 of block 1, last DeltaNet before attention)",
     ),
     HookPoint(
         sae_id="sae_attn_early",
-        layer=11,
+        layer=7,
         layer_type=LayerType.ATTENTION,
-        block=2,
-        description="Post-Attention (position 3 of block 2)",
+        block=1,
+        description="Post-Attention (position 3 of block 1)",
     ),
-    # --- Early-mid (block 5) ---
+    # --- Early-mid (block 3) ---
     HookPoint(
         sae_id="sae_delta_earlymid",
-        layer=22,
+        layer=14,
         layer_type=LayerType.DELTANET,
-        block=5,
-        description="Early-mid DeltaNet (position 2 of block 5, last DeltaNet before attention)",
+        block=3,
+        description="Early-mid DeltaNet (position 2 of block 3, last DeltaNet before attention)",
     ),
     HookPoint(
         sae_id="sae_attn_earlymid",
-        layer=23,
+        layer=15,
         layer_type=LayerType.ATTENTION,
-        block=5,
-        description="Early-mid Attention (position 3 of block 5)",
+        block=3,
+        description="Early-mid Attention (position 3 of block 3)",
     ),
-    # --- Mid (block 8) ---
+    # --- Mid (block 5) ---
     HookPoint(
         sae_id="sae_delta_mid_pos1",
-        layer=33,
+        layer=21,
         layer_type=LayerType.DELTANET,
-        block=8,
-        description="Control: DeltaNet position 1 of block 8 (middle of DeltaNet sequence)",
+        block=5,
+        description="Control: DeltaNet position 1 of block 5 (middle of DeltaNet sequence)",
     ),
     HookPoint(
         sae_id="sae_delta_mid",
-        layer=34,
+        layer=22,
         layer_type=LayerType.DELTANET,
-        block=8,
-        description="Midpoint DeltaNet (position 2 of block 8, last DeltaNet before attention)",
+        block=5,
+        description="Midpoint DeltaNet (position 2 of block 5, last DeltaNet before attention)",
     ),
     HookPoint(
         sae_id="sae_attn_mid",
-        layer=35,
+        layer=23,
         layer_type=LayerType.ATTENTION,
-        block=8,
-        description="Midpoint Attention (position 3 of block 8)",
+        block=5,
+        description="Midpoint Attention (position 3 of block 5)",
     ),
-    # --- Late (block 13) ---
+    # --- Late (block 8) ---
     HookPoint(
         sae_id="sae_delta_late",
-        layer=54,
+        layer=34,
         layer_type=LayerType.DELTANET,
-        block=13,
-        description="Late DeltaNet (position 2 of block 13, last DeltaNet before attention)",
+        block=8,
+        description="Late DeltaNet (position 2 of block 8, last DeltaNet before attention)",
     ),
     HookPoint(
         sae_id="sae_attn_late",
-        layer=55,
+        layer=35,
         layer_type=LayerType.ATTENTION,
-        block=13,
-        description="Late Attention (position 3 of block 13)",
+        block=8,
+        description="Late Attention (position 3 of block 8)",
     ),
 ]
 
@@ -173,13 +180,20 @@ def validate_configs_agree(model_cfg: ModelConfig, arch_cfg: Qwen35Config) -> No
 class ModelConfig(BaseModel):
     """Model loading configuration, loaded from configs/model.yaml."""
 
-    model_id: str = "Qwen/Qwen3.5-27B"
-    hidden_dim: int = 5120
-    num_layers: int = 64
+    model_id: str = "Qwen/Qwen3.5-35B-A3B"
+    hidden_dim: int = 2048
+    num_layers: int = 40
     block_size: int = 4
-    num_blocks: int = 16
+    num_blocks: int = 10
     context_length: int = 4096
     dtype: str = "bfloat16"
+
+    # MoE parameters (optional, for architecture analysis)
+    num_experts: int = 256
+    num_experts_per_tok: int = 8
+    shared_expert: bool = True
+    moe_intermediate_size: int = 512
+    shared_expert_intermediate_size: int = 512
 
     @classmethod
     def from_yaml(cls, path: Path) -> ModelConfig:

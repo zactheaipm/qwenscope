@@ -55,3 +55,6 @@ logs/
 *~
 .DS_Store
 Thumbs.db
+
+# ── Notes (local only) ───────────────────────────────────────────────────────
+adaptation.md

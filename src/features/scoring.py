@@ -325,7 +325,7 @@ def batch_significance_with_fdr(
 ) -> list[tuple[int, float, float, bool]]:
     """Compute significance for a subset of features with FDR correction.
 
-    With 40,960 features, uncorrected p < 0.05 yields ~2,048 false positives.
+    With the full dictionary, uncorrected p < 0.05 yields ~2,048 false positives.
     Benjamini-Hochberg FDR correction controls the false discovery rate.
 
     IMPORTANT — pre-selection invalidates FDR: if ``feature_indices`` was
@@ -333,7 +333,7 @@ def batch_significance_with_fdr(
     procedure no longer controls FDR at the stated ``alpha`` because you have
     already selected on the test statistic. For valid FDR control across all
     features, use ``fdr_screen_all_features()`` instead, which tests all
-    40,960 features analytically without prior selection.
+    the full dictionary analytically without prior selection.
 
     Args:
         extraction_results: Feature extraction results.
@@ -612,7 +612,7 @@ def compute_all_parametric_pvalues(
 
     More efficient than calling ``parametric_significance`` per feature because
     it vectorises the t-test over the entire dictionary at once. Use this when
-    you need FDR-controlled feature discovery across all 40,960 features.
+    you need FDR-controlled feature discovery across all the full dictionary.
 
     Args:
         extraction_results: Feature extraction results for one trait.

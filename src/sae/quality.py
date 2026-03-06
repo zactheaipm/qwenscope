@@ -44,7 +44,9 @@ def _intervention_hook(
             return (modified,) + output[1:]
         return modify_fn(output)
 
-    handle = model.model.layers[layer].register_forward_hook(hook_fn)
+    from src.model.loader import get_layers_module
+    layers_module = get_layers_module(model)
+    handle = layers_module[layer].register_forward_hook(hook_fn)
     try:
         yield
     finally:
@@ -177,20 +179,23 @@ def compute_reconstruction_metrics(
                 continue
 
             # Run through SAE (offline, for MSE/EV/L0)
-            reconstruction, features, _ = sae(acts_flat)
+            # Cast to SAE dtype (float32) for accurate reconstruction metrics
+            sae_dtype = next(sae.parameters()).dtype
+            acts_flat_sae = acts_flat.to(sae_dtype)
+            reconstruction, features, _ = sae(acts_flat_sae)
 
-            # MSE
-            mse = (acts_flat - reconstruction).pow(2).mean().item()
-            total_mse += mse * acts_flat.shape[0]
+            # MSE (computed in SAE dtype for numerical consistency)
+            mse = (acts_flat_sae - reconstruction).pow(2).mean().item()
+            total_mse += mse * acts_flat_sae.shape[0]
 
             # Accumulate sufficient statistics for global variance (Chan's formula).
             # Using sum and sum-of-squares avoids the bias of weighted-average-of-
             # per-batch-variances. Global variance = E[X^2] - E[X]^2.
-            residual = acts_flat - reconstruction
-            total_residual_sum += residual.sum(dim=0).cpu()
-            total_residual_sq_sum += residual.pow(2).sum(dim=0).cpu()
-            total_acts_sum += acts_flat.sum(dim=0).cpu()
-            total_acts_sq_sum += acts_flat.pow(2).sum(dim=0).cpu()
+            residual = acts_flat_sae - reconstruction
+            total_residual_sum += residual.sum(dim=0).cpu().float()
+            total_residual_sq_sum += residual.pow(2).sum(dim=0).cpu().float()
+            total_acts_sum += acts_flat_sae.sum(dim=0).cpu().float()
+            total_acts_sq_sum += acts_flat_sae.pow(2).sum(dim=0).cpu().float()
 
             # L0 sparsity
             active_features = (features.abs() > 0)                  # (N, dict_size)
@@ -209,9 +214,10 @@ def compute_reconstruction_metrics(
 
             def sae_replace(hidden_states: torch.Tensor) -> torch.Tensor:
                 orig_shape = hidden_states.shape  # (B, S, D)
+                orig_dtype = hidden_states.dtype
                 flat = hidden_states.reshape(-1, orig_shape[-1])
                 recon, _, _ = sae(flat)
-                recon = recon.reshape(orig_shape)
+                recon = recon.reshape(orig_shape).to(orig_dtype)
                 # Only replace at non-padding positions; keep original at padding.
                 pad_mask = _attn_mask_pass2.unsqueeze(-1).bool()  # (B, S, 1)
                 return torch.where(pad_mask, recon, hidden_states)
@@ -354,6 +360,144 @@ def compute_reconstruction_metrics(
         pass
 
     return metrics
+
+
+def compute_per_trait_ev(
+    model: Any,
+    sae: TopKSAE,
+    layer: int,
+    tokenizer: Any,
+    device: str = "cuda",
+    max_seq_length: int = 2048,
+) -> dict[str, dict[str, float]]:
+    """Compute reconstruction EV and MSE broken down by behavioral trait.
+
+    Uses contrastive pair conversations (both HIGH and LOW polarities) as
+    trait-specific eval data. Each trait gets ~300+ conversations covering
+    4 domains. This reveals whether the SAE reconstructs trait-relevant
+    activations as well as general text.
+
+    Only computes activation-level metrics (1 forward pass per batch).
+    Does NOT compute loss_recovered (which needs 3 passes) — use
+    ``compute_reconstruction_metrics`` for that.
+
+    Args:
+        model: The base language model.
+        sae: Trained SAE to evaluate.
+        layer: Layer index to extract activations from.
+        tokenizer: Model tokenizer (for chat template).
+        device: Device for computation.
+        max_seq_length: Max sequence length for tokenization.
+
+    Returns:
+        Dict mapping trait name to {mse, explained_variance, n_tokens}.
+    """
+    from src.data.contrastive import BehavioralTrait, ContrastivePairGenerator
+
+    sae.eval()
+    cache = ActivationCache(model, layers=[layer])
+    generator = ContrastivePairGenerator()
+    all_pairs = generator.generate_all()
+
+    results: dict[str, dict[str, float]] = {}
+
+    for trait in BehavioralTrait:
+        pairs = all_pairs[trait]
+
+        # Tokenize all conversations (both high and low) for this trait
+        tokenized_batches: list[dict[str, torch.Tensor]] = []
+        for pair in pairs:
+            for messages in (pair.messages_high, pair.messages_low):
+                try:
+                    text = tokenizer.apply_chat_template(
+                        messages,
+                        tools=pair.tools if pair.tools else None,
+                        tokenize=False,
+                        add_generation_prompt=False,
+                    )
+                except Exception:
+                    text = tokenizer.apply_chat_template(
+                        [{"role": m["role"], "content": m.get("content", "")} for m in messages],
+                        tokenize=False,
+                        add_generation_prompt=False,
+                    )
+                encoded = tokenizer(
+                    text,
+                    max_length=max_seq_length,
+                    truncation=True,
+                    padding="max_length",
+                    return_tensors="pt",
+                )
+                tokenized_batches.append({
+                    "input_ids": encoded["input_ids"].squeeze(0),
+                    "attention_mask": encoded["attention_mask"].squeeze(0),
+                })
+
+        if not tokenized_batches:
+            results[trait.value] = {"mse": float("inf"), "explained_variance": 0.0, "n_tokens": 0}
+            continue
+
+        # Accumulate sufficient statistics across all conversations
+        residual_sum = torch.zeros(sae.hidden_dim)
+        residual_sq_sum = torch.zeros(sae.hidden_dim)
+        acts_sum = torch.zeros(sae.hidden_dim)
+        acts_sq_sum = torch.zeros(sae.hidden_dim)
+        total_mse = 0.0
+        total_tokens = 0
+
+        batch_size = 8
+        with torch.no_grad():
+            for i in range(0, len(tokenized_batches), batch_size):
+                chunk = tokenized_batches[i : i + batch_size]
+                input_ids = torch.stack([c["input_ids"] for c in chunk]).to(device)
+                attention_mask = torch.stack([c["attention_mask"] for c in chunk]).to(device)
+
+                with cache.active():
+                    model(input_ids=input_ids, attention_mask=attention_mask)
+
+                acts = cache.get(layer)
+                mask = attention_mask.unsqueeze(-1).bool()
+                acts_flat = acts[mask.expand_as(acts)].view(-1, acts.shape[-1])
+
+                if acts_flat.shape[0] == 0:
+                    cache.clear()
+                    continue
+
+                reconstruction, _, _ = sae(acts_flat)
+
+                residual = acts_flat - reconstruction
+                total_mse += residual.pow(2).mean().item() * acts_flat.shape[0]
+                residual_sum += residual.sum(dim=0).cpu()
+                residual_sq_sum += residual.pow(2).sum(dim=0).cpu()
+                acts_sum += acts_flat.sum(dim=0).cpu()
+                acts_sq_sum += acts_flat.pow(2).sum(dim=0).cpu()
+                total_tokens += acts_flat.shape[0]
+
+                cache.clear()
+
+        if total_tokens > 1:
+            global_residual_var = (residual_sq_sum / total_tokens) - (residual_sum / total_tokens).pow(2)
+            global_acts_var = (acts_sq_sum / total_tokens) - (acts_sum / total_tokens).pow(2)
+            valid_dims = global_acts_var > 1e-8
+            if valid_dims.any():
+                per_dim_ev = 1.0 - global_residual_var[valid_dims] / global_acts_var[valid_dims]
+                ev = float(per_dim_ev.mean().item())
+            else:
+                ev = 1.0
+        else:
+            ev = 1.0
+
+        results[trait.value] = {
+            "mse": total_mse / max(total_tokens, 1),
+            "explained_variance": ev,
+            "n_tokens": total_tokens,
+        }
+        logger.info(
+            "Per-trait EV [%s]: EV=%.4f, MSE=%.4f, tokens=%d",
+            trait.value, ev, results[trait.value]["mse"], total_tokens,
+        )
+
+    return results
 
 
 def _gini(freqs: torch.Tensor) -> float:

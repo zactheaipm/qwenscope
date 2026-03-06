@@ -1,8 +1,8 @@
 # QwenScope
 
-**SAE-based behavioral decomposition and steering for Qwen 3.5-27B's hybrid GatedDeltaNet + Attention architecture.**
+**SAE-based behavioral decomposition and steering for Qwen 3.5-35B-A3B's hybrid GatedDeltaNet + Attention MoE architecture.**
 
-QwenScope trains [Sparse Autoencoders](https://transformer-circuits.pub/2023/monosemantic-features) (SAEs) on the residual stream of [Qwen 3.5-27B](https://huggingface.co/Qwen/Qwen3.5-27B) — a 64-layer hybrid model that interleaves GatedDeltaNet (linear attention) and standard attention layers — to identify, decompose, and steer five core behavioral traits of agentic language model behavior.
+QwenScope trains [Sparse Autoencoders](https://transformer-circuits.pub/2023/monosemantic-features) (SAEs) on the residual stream of [Qwen 3.5-35B-A3B](https://huggingface.co/Qwen/Qwen3.5-35B-A3B) — a 40-layer hybrid Mixture-of-Experts model that interleaves GatedDeltaNet (linear attention) and standard attention layers — to identify, decompose, and steer five core behavioral traits of agentic language model behavior.
 
 The central question: **How are behavioral traits encoded differently across DeltaNet vs. attention layers in a hybrid architecture?**
 
@@ -25,28 +25,28 @@ QwenScope decomposes agentic behavior into 5 traits, each with 3 measurable sub-
 ## Architecture
 
 <p align="center">
-  <img src="diagrams/01_architecture_overview.svg" alt="QwenScope — SAE Hook Points on Qwen 3.5-27B" width="900" />
+  <img src="diagrams/01_architecture_overview.svg" alt="QwenScope — SAE Hook Points on Qwen 3.5-35B-A3B" width="900" />
 </p>
 
-Qwen 3.5-27B organizes its 64 layers into 16 blocks of 4 layers each. Within each block, the first 3 layers use GatedDeltaNet (a linear attention variant) and the 4th uses standard multi-head attention:
+Qwen 3.5-35B-A3B is a Mixture-of-Experts model (35B total parameters, ~3B active per token) with 40 layers organized into 10 blocks of 4 layers each. Within each block, the first 3 layers use GatedDeltaNet (a linear attention variant) and the 4th uses standard multi-head attention. Every layer feeds into a MoE FFN (256 experts, 8 routed + 1 shared per token):
 
 ```
-Block k: [DeltaNet₀, DeltaNet₁, DeltaNet₂, Attention₃] × 16 blocks = 64 layers
+Block k: [DeltaNet₀ → MoE, DeltaNet₁ → MoE, DeltaNet₂ → MoE, Attention₃ → MoE] × 10 blocks = 40 layers
 ```
 
-SAEs are trained at 9 hook points spanning early, early-mid, mid, and late positions across both layer types:
+This gives 30 DeltaNet layers and 10 attention layers. SAEs are trained at 9 hook points spanning early, early-mid, mid, and late positions across both layer types:
 
-| SAE ID | Layer | Type | Block | Purpose |
-|--------|-------|------|-------|---------|
-| `sae_delta_early` | 10 | DeltaNet | 2 | Early DeltaNet |
-| `sae_attn_early` | 11 | Attention | 2 | Early attention |
-| `sae_delta_earlymid` | 22 | DeltaNet | 5 | Early-mid DeltaNet |
-| `sae_attn_earlymid` | 23 | Attention | 5 | Early-mid attention |
-| `sae_delta_mid_pos1` | 33 | DeltaNet | 8 | Mid DeltaNet (position 1 — within-block control) |
-| `sae_delta_mid` | 34 | DeltaNet | 8 | Mid DeltaNet (position 2) |
-| `sae_attn_mid` | 35 | Attention | 8 | Mid attention |
-| `sae_delta_late` | 54 | DeltaNet | 13 | Late DeltaNet |
-| `sae_attn_late` | 55 | Attention | 13 | Late attention |
+| SAE ID | Layer | Type | Block | Position | Purpose |
+|--------|-------|------|-------|----------|---------|
+| `sae_delta_early` | 6 | DeltaNet | 1 | 2 | Early DeltaNet (~15% depth) |
+| `sae_attn_early` | 7 | Attention | 1 | 3 | Early attention |
+| `sae_delta_earlymid` | 14 | DeltaNet | 3 | 2 | Early-mid DeltaNet (~35% depth) |
+| `sae_attn_earlymid` | 15 | Attention | 3 | 3 | Early-mid attention |
+| `sae_delta_mid_pos1` | 21 | DeltaNet | 5 | 1 | Control: within-block position comparison (~55% depth) |
+| `sae_delta_mid` | 22 | DeltaNet | 5 | 2 | Mid DeltaNet |
+| `sae_attn_mid` | 23 | Attention | 5 | 3 | Mid attention |
+| `sae_delta_late` | 34 | DeltaNet | 8 | 2 | Late DeltaNet (~85% depth) |
+| `sae_attn_late` | 35 | Attention | 8 | 3 | Late attention |
 
 The `sae_delta_mid_pos1` SAE exists as a control — comparing positions 1 and 2 within the same block isolates layer-type effects from positional confounds.
 
@@ -54,12 +54,21 @@ The `sae_delta_mid_pos1` SAE exists as a control — comparing positions 1 and 2
 
 ### SAE Architecture
 
-Each SAE is a **TopK Sparse Autoencoder** (dictionary size 40,960 = 8× hidden dim, k=64):
+Each SAE is a **TopK Sparse Autoencoder** with depth-dependent hyperparameters:
 
-- Encoder: 5120 → 40960 with learned pre-bias
+| Depth | Dictionary Size | k | Rationale |
+|-------|----------------|---|-----------|
+| Early (block 1) | 8,192 (4× hidden dim) | 128 | Denser coding to combat high dead feature rates at early layers |
+| Early-mid (block 3) | 16,384 (8× hidden dim) | 96 | Middle ground between dense-early and standard-mid |
+| Mid (block 5) | 16,384 (8× hidden dim) | 64 | Standard SAE configuration |
+| Late (block 8) | 16,384 (8× hidden dim) | 64 | Standard SAE configuration |
+
+All SAEs share the same core architecture:
+
+- Encoder: 2048 → dict_size with learned pre-bias
 - TopK sparsification with ReLU clamping
-- Decoder: 40960 → 5120 (no bias, unit-normalized columns)
-- Dead feature resampling every 5,000 steps via auxiliary-k loss
+- Decoder: dict_size → 2048 (no bias, unit-normalized columns)
+- Dead feature resampling every 5,000 steps (early layers: every 10,000 steps) via auxiliary-k loss
 
 ### Training Data Mix
 
@@ -69,7 +78,7 @@ SAEs are trained on 200M tokens per hook point (9 hook points total) with the fo
 - **35% WildChat-1M** — diverse real-world conversations (GDPR-filtered)
 - **30% Synthetic tool-use** — multi-turn tool-calling conversations
 
-Training uses FAST (Feature Alignment with Sequential Tokens) methodology: full conversations are processed sequentially with sequence packing for efficiency.
+Training uses FAST (Feature Alignment with Sequential Tokens) methodology: full conversations are processed sequentially with sequence packing for efficiency. A circular CPU buffer (2M vectors, ~8 GB) provides shuffle mixing.
 
 ### Contrastive Feature Identification
 
@@ -82,7 +91,7 @@ Behavioral features are identified through contrastive activation analysis:
 1. **1,520 contrastive prompt pairs** are generated (800 composite + 720 sub-behavior-specific + 60 null controls)
 2. Each pair has HIGH and LOW variants — identical user messages but different system prompts that elicit different behavioral dispositions
 3. Activations are extracted at the **last token** position (avoiding sequence-length confounds from different system prompt lengths)
-4. **Trait Association Score (TAS)** = mean(high − low) / std(high − low) per feature, with cluster-robust standard errors, permutation-test p-values, and Benjamini-Hochberg FDR correction
+4. **Trait Association Score (TAS)** = mean(high - low) / std(high - low) per feature, with cluster-robust standard errors, permutation-test p-values, and Benjamini-Hochberg FDR correction
 
 ### Steering
 
@@ -93,17 +102,17 @@ Behavioral features are identified through contrastive activation analysis:
 Behavioral steering modifies SAE features during autoregressive decoding:
 
 ```
-steered = original + SAE.decode(modified_features) − SAE.decode(original_features)
+steered = original + SAE.decode(modified_features) - SAE.decode(original_features)
 ```
 
-Steering is applied **only during the decode phase** (sequence length = 1), never during prompt prefill, so the prompt representation stays uncorrupted. Non-target features are exactly preserved (the no-bias decoder ensures the delta exactly cancels non-target contributions).
+Steering is applied **only during the decode phase** (sequence length = 1), never during prompt prefill, so the prompt representation stays uncorrupted. Non-target features are exactly preserved (the no-bias decoder ensures the delta exactly cancels non-target contributions). Implementation uses a single GEMM — `decoder(modified - original)` — since the pre-bias terms cancel exactly.
 
 ### Evaluation
 
 Steered model outputs are evaluated through:
 
 - **Agent harness**: ReAct-style tool-calling loop using Qwen 3.5's native tool-call format with `enable_thinking=False` (suppresses `<think>` blocks so steering is causally meaningful)
-- **LLM judge**: Scores trajectories on all 15 sub-behaviors (0.0–1.0 scale) using detailed rubrics
+- **LLM judge**: Claude Sonnet 4 scores trajectories on all 15 sub-behaviors (0.0-1.0 scale) using detailed rubrics at temperature 0.0 for reproducibility
 - **Safety evaluation**: Tests whether steering can override RLHF-trained safety behaviors on mild engineering scenarios (e.g., deploying without tests, skipping security review)
 
 ## Dataset
@@ -119,14 +128,14 @@ The generated dataset consists of:
 | `train_examples.jsonl` | ~10,000 | Training conversations |
 | `eval_examples.jsonl` | ~1,000 | Held-out evaluation conversations |
 
-Each example is a multi-turn conversation with system prompt, user message, assistant responses with tool calls, and tool responses. Generated with diversity from 20 scenario types × 15 domains × 4 tool-call counts = 1,200 unique prompt seeds.
+Each example is a multi-turn conversation with system prompt, user message, assistant responses with tool calls, and tool responses. Generated with diversity from 20 scenario types x 15 domains x 4 tool-call counts = 1,200 unique prompt seeds.
 
 ### Contrastive Pairs
 
 Generated at runtime by `05_build_contrastive_data.py` from templates in `src/data/contrastive.py`:
 
-- **800 composite pairs**: 5 traits × 4 domains × 10 templates × 4 variations
-- **720 sub-behavior pairs**: 15 sub-behaviors × 3 templates × 4 variations × 4 domains
+- **800 composite pairs**: 5 traits x 4 domains x 10 templates x 4 variations
+- **720 sub-behavior pairs**: 15 sub-behaviors x 3 templates x 4 variations x 4 domains
 - **60 null-trait control pairs**: For calibrating significance thresholds
 
 The 4 task domains: Coding, Research, Communication, Data.
@@ -137,7 +146,7 @@ The full pipeline is implemented as 10 numbered scripts, each writing a JSON man
 
 | Step | Script | Description |
 |------|--------|-------------|
-| 01 | `01_setup_model.py` | Download Qwen 3.5-27B and verify activation hooks on all 64 layers |
+| 01 | `01_setup_model.py` | Download Qwen 3.5-35B-A3B and verify activation hooks on all 40 layers |
 | 02 | `02_extract_activations.py` | Extract small activation sample for spot-checks |
 | 03 | `03_train_saes.py` | Train 9 TopK SAEs in batches of `--max-parallel` (default 3), 200M tokens each, model loaded once |
 | 04 | `04_evaluate_sae_quality.py` | Evaluate SAE quality (MSE, explained variance, L0, loss recovered) on both general chat and tool-use held-out data |
@@ -207,8 +216,8 @@ The recommended RunPod configuration:
 | GPU | NVIDIA H200 SXM (141 GB VRAM) |
 | Volume | 200 GB network volume |
 | Container Disk | 50 GB |
-| vCPUs | ≥ 16 |
-| RAM | ≥ 128 GB |
+| vCPUs | >= 16 |
+| RAM | >= 128 GB |
 | Docker Image | `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04` |
 
 After creating the pod:
@@ -237,7 +246,7 @@ python scripts/run_pilot.py
 qwenscope/
 ├── configs/
 │   ├── experiment.yaml          # Traits, domains, steering experiments
-│   ├── model.yaml               # Qwen 3.5-27B architecture parameters
+│   ├── model.yaml               # Qwen 3.5-35B-A3B architecture parameters
 │   ├── sae_training.yaml        # SAE hyperparameters and 9 hook points
 │   └── eval.yaml                # Evaluation config (judge model, temperature)
 ├── src/
@@ -266,19 +275,22 @@ qwenscope/
 - **Decode-only steering** prevents corrupting the prompt representation during prefill
 - **No-bias decoder** in the SAE ensures the steering delta exactly cancels for non-target features
 - **Position-in-block control SAE** (`sae_delta_mid_pos1`) isolates layer-type effects from positional confounds within the 4-layer block
+- **Depth-dependent SAE hyperparameters**: Early layers use denser coding (k=128, 4x dict) because they exhibit higher dead feature rates with standard k=64/8x settings
 - **`enable_thinking=False`** suppresses Qwen 3.5's `<think>` blocks during evaluation, making steering causally meaningful
-- **Hooks capture the residual stream after the full layer** (sublayer + FFN + skip connection) — findings are framed as "layers containing DeltaNet" rather than "DeltaNet itself"
+- **Hooks capture the residual stream after the full layer** (sublayer + MoE FFN + skip connection) — findings are framed as "layers containing DeltaNet" rather than "DeltaNet itself"
 - **Null controls** (60 pairs) calibrate significance thresholds for TAS scores
+- **Document boundary masking** excludes tokens within 2 positions of document boundaries during training to prevent DeltaNet state leakage in packed sequences
+- **Circular CPU buffer** (2M vectors, ~8 GB) for activation mixing keeps VRAM free for model and SAE weights
 - **Responsible disclosure**: the default HuggingFace release redacts TAS scores, trait-associated feature lists, and steering multiplier recommendations
 
 ## Requirements
 
-- Python ≥ 3.11
-- PyTorch ≥ 2.6 with CUDA 12.4
-- [Flash Linear Attention (fla)](https://github.com/fla-org/flash-linear-attention) — provides fast CUDA kernels for Qwen 3.5's 48 GatedDeltaNet layers (without fla, these fall back to naive sequential recurrence)
+- Python >= 3.11
+- PyTorch >= 2.6 with CUDA 12.4
+- [Flash Linear Attention (fla)](https://github.com/fla-org/flash-linear-attention) — provides fast CUDA kernels for Qwen 3.5's 30 GatedDeltaNet layers (without fla, these fall back to naive sequential recurrence)
 - [causal-conv1d](https://github.com/Dao-AILab/causal-conv1d) — fast causal 1D convolution kernel used by GatedDeltaNet layers
-- [Flash Attention](https://github.com/Dao-AILab/flash-attention) — for the 16 standard attention layers
-- GPU: H200 SXM (141 GB VRAM) recommended. A100 80GB is the minimum for Qwen 3.5-27B in BFloat16 (~54 GB). See [VRAM budget](#vram-budget-for-parallel-sae-training) for details
+- [Flash Attention](https://github.com/Dao-AILab/flash-attention) — for the 10 standard attention layers
+- GPU: H200 SXM (141 GB VRAM) recommended. A100 80GB is the minimum for Qwen 3.5-35B-A3B in BFloat16 (~70 GB). See [VRAM budget](#vram-budget-for-parallel-sae-training) for details
 - Anthropic API key (for LLM judge evaluation and feature interpretation)
 - ~200GB disk for model weights + activations
 
@@ -290,18 +302,18 @@ With `--max-parallel 3`, the 9 SAEs train in 3 batches (3+3+3). Per-batch VRAM o
 
 | Component | VRAM | Details |
 |-----------|------|---------|
-| Qwen 3.5-27B weights | ~54 GB | 27B params × 2 bytes (BFloat16) |
-| 3 SAE models | ~2.4 GB | 3 × ~0.8 GB (encoder 5120→40960 + decoder 40960→5120 in BF16) |
-| 3 SAE optimizer states | ~10.2 GB | 3 × ~3.4 GB (Adam momentum + variance in FP32) |
-| 3 SAE gradients | ~2.4 GB | 3 × ~0.8 GB |
-| Forward pass workspace | ~10 GB | Batch of 16 × 2048 tokens through 64 layers (no grad) |
-| Activation cache | ~1.0 GB | 3 captured layers × 16 × 2048 × 5120 × 2 bytes |
+| Qwen 3.5-35B-A3B weights | ~70 GB | 35B params x 2 bytes (BFloat16) |
+| 3 SAE models | ~0.4 GB | 3 x ~0.13 GB (encoder 2048->16384 + decoder 16384->2048 in BF16; less for 8192-dict early SAEs) |
+| 3 SAE optimizer states | ~1.6 GB | 3 x ~0.5 GB (Adam momentum + variance in FP32) |
+| 3 SAE gradients | ~0.4 GB | 3 x ~0.13 GB |
+| Forward pass workspace | ~5 GB | Batch of 16 x 2048 tokens through 40 layers (no grad); MoE routing only activates 9/256 experts |
+| Activation cache | ~0.2 GB | 3 captured layers x 16 x 2048 x 2048 x 2 bytes |
 | CUDA/PyTorch overhead | ~5 GB | Allocator fragmentation, kernel state |
-| **Total** | **~85 GB** | |
+| **Total** | **~83 GB** | |
 
-This fits comfortably on an H200 SXM (141 GB). Training all 9 simultaneously is not recommended on a single GPU due to VRAM constraints.
+This fits comfortably on an H200 SXM (141 GB). On A100 80GB it is tight — consider `--max-parallel 2` if VRAM is constrained.
 
-**Multi-GPU alternative**: With 2+ A100 80GB GPUs, the script places the model on `cuda:0` (~71 GB with forward pass overhead) and distributes SAE workers across `cuda:1`..`cuda:N-1`. This works but adds PCIe transfer overhead since activations must cross the GPU interconnect for every batch.
+**Multi-GPU alternative**: With 2+ A100 80GB GPUs, the script places the model on `cuda:0` and distributes SAE workers across `cuda:1`..`cuda:N-1`. This works but adds PCIe transfer overhead since activations must cross the GPU interconnect for every batch.
 
 ## Tests
 

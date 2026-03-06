@@ -72,6 +72,13 @@ def main() -> None:
                 data = load_file(str(tas_path))
                 all_tas[trait][sae_id] = data["tas"]
 
+    # Validate: fail loudly if no TAS scores or SAEs were loaded
+    if not sae_dict:
+        raise RuntimeError("No trained SAEs found in data/saes/. Run 03_train_saes.py first.")
+    n_tas = sum(len(v) for v in all_tas.values())
+    if n_tas == 0:
+        raise RuntimeError("No TAS scores found in %s. Run 06_identify_features.py first." % tas_dir)
+
     # Use extended scenarios (100+) for stronger statistical power
     scenarios = build_extended_scenarios()
     logger.info("Using %d evaluation scenarios", len(scenarios))

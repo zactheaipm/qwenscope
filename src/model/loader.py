@@ -1,4 +1,4 @@
-"""Qwen 3.5-27B model loading with dtype selection."""
+"""Qwen 3.5-35B-A3B model loading with dtype selection."""
 
 from __future__ import annotations
 
@@ -21,13 +21,55 @@ DTYPE_MAP: dict[str, torch.dtype] = {
 }
 
 
+def get_layers_module(model: torch.nn.Module) -> torch.nn.ModuleList:
+    """Resolve the transformer layers module from any supported model class.
+
+    Qwen 3.5 models come in two variants:
+      - CausalLM (27B): layers at model.model.layers
+      - VLM/MoE (35B-A3B): layers at model.model.text_model.layers
+        (Qwen3_5MoeForConditionalGeneration wraps text in a text_model)
+
+    This function probes for the correct path so that hooks.py, steering,
+    and activation extraction all work regardless of model variant.
+
+    Args:
+        model: A HuggingFace model instance.
+
+    Returns:
+        The nn.ModuleList containing the transformer decoder layers.
+
+    Raises:
+        AttributeError: If no known layer path is found.
+    """
+    # Try paths in order of specificity
+    candidates = [
+        ("model.model.text_model.layers", lambda m: m.model.text_model.layers),
+        ("model.model.layers", lambda m: m.model.layers),
+        ("model.language_model.model.layers", lambda m: m.language_model.model.layers),
+    ]
+    for path_name, accessor in candidates:
+        try:
+            layers = accessor(model)
+            if isinstance(layers, torch.nn.ModuleList) and len(layers) > 0:
+                logger.debug("Layer path resolved: %s (%d layers)", path_name, len(layers))
+                return layers
+        except AttributeError:
+            continue
+
+    raise AttributeError(
+        "Could not resolve transformer layers. Tried: "
+        + ", ".join(p for p, _ in candidates)
+        + ". Inspect the model with print(model) and add the correct path."
+    )
+
+
 def load_model(
     model_id: str | None = None,
     dtype: str = "bfloat16",
     device: str | None = None,
     attn_implementation: str = "eager",
 ) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
-    """Load Qwen 3.5-27B with specified precision.
+    """Load Qwen 3.5-35B-A3B with specified precision.
 
     Args:
         model_id: HuggingFace model ID or local path. Defaults to env var QWEN35_MODEL_PATH.
@@ -43,7 +85,7 @@ def load_model(
         device = os.environ.get("DEVICE", "cuda")
 
     if model_id is None:
-        model_id = os.environ.get("QWEN35_MODEL_PATH", "Qwen/Qwen3.5-27B")
+        model_id = os.environ.get("QWEN35_MODEL_PATH", "Qwen/Qwen3.5-35B-A3B")
     torch_dtype = DTYPE_MAP.get(dtype, torch.bfloat16)
     logger.info("Loading model: %s with dtype=%s", model_id, dtype)
 
@@ -51,7 +93,7 @@ def load_model(
 
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
-        torch_dtype=torch_dtype,
+        dtype=torch_dtype,
         device_map=device if device != "cpu" else None,
         attn_implementation=attn_implementation,
         trust_remote_code=True,
@@ -61,10 +103,18 @@ def load_model(
         model = model.to(device)
 
     model.eval()
+
+    # Resolve and log layer path
+    layers = get_layers_module(model)
+    hidden_size = getattr(model.config, "hidden_size", None)
+    # For VLM models, hidden_size may be nested under text_config
+    if hidden_size is None:
+        hidden_size = getattr(getattr(model.config, "text_config", None), "hidden_size", "unknown")
+
     logger.info(
-        "Model loaded: %d layers, hidden_dim=%d, device=%s",
-        len(model.model.layers),
-        model.config.hidden_size,
+        "Model loaded: %d layers, hidden_dim=%s, device=%s",
+        len(layers),
+        hidden_size,
         device,
     )
     return model, tokenizer

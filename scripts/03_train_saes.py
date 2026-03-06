@@ -250,59 +250,62 @@ def run_producer(
     data_builder = SAETrainingDataBuilder(tokenizer, config)
     dataset = data_builder.build_dataset()
 
-    # Register hooks on ALL target layers at once
+    # Register hooks once before the loop (not per forward pass)
     cache = ActivationCache(model, layers=layers)
+    cache._register_hooks()
 
     tokens_processed = 0
     batch_size = 16
     batch: list[dict[str, torch.Tensor]] = []
     start_time = time.monotonic()
 
-    for item in iter(dataset):
-        if error_event.is_set():
-            logger.warning("Producer: error event detected, stopping early.")
-            break
+    try:
+        for item in iter(dataset):
+            if error_event.is_set():
+                logger.warning("Producer: error event detected, stopping early.")
+                break
 
-        batch.append(item)
-        if len(batch) < batch_size:
-            continue
+            batch.append(item)
+            if len(batch) < batch_size:
+                continue
 
-        input_ids = torch.stack([b["input_ids"] for b in batch]).to(model_device)
-        attention_mask = torch.stack([b["attention_mask"] for b in batch]).to(model_device)
-        batch = []
+            input_ids = torch.stack([b["input_ids"] for b in batch]).to(model_device)
+            attention_mask = torch.stack([b["attention_mask"] for b in batch]).to(model_device)
+            batch = []
 
-        # Single forward pass captures all layers
-        with torch.no_grad():
-            with cache.active():
+            # Single forward pass captures all layers
+            with torch.no_grad():
                 model(input_ids=input_ids, attention_mask=attention_mask)
 
-        # Mask padding and dispatch to per-SAE queues.
-        # Multiple SAEs may share the same layer (e.g., sae_delta_mid and
-        # sae_delta_mid_pos1 both target the same layer). Each SAE gets its
-        # own queue so they all receive the full activation stream.
-        mask = attention_mask.unsqueeze(-1).bool()  # (B, S, 1)
-        for layer in layers:
-            acts = cache.get(layer)  # (B, S, D)
-            acts_masked = acts[mask.expand_as(acts)].view(-1, acts.shape[-1])  # (N, D)
-            acts_cpu = acts_masked.cpu()
-            for sae_id in layer_to_sae_ids[layer]:
-                queues[sae_id].put(acts_cpu)
+            # Mask padding and dispatch to per-SAE queues.
+            # Multiple SAEs may share the same layer (e.g., sae_delta_mid and
+            # sae_delta_mid_pos1 both target the same layer). Each SAE gets its
+            # own queue so they all receive the full activation stream.
+            mask = attention_mask.unsqueeze(-1).bool()  # (B, S, 1)
+            for layer in layers:
+                acts = cache.get(layer)  # (B, S, D)
+                acts_masked = acts[mask.expand_as(acts)].view(-1, acts.shape[-1])  # (N, D)
+                acts_cpu = acts_masked.cpu()
+                for sae_id in layer_to_sae_ids[layer]:
+                    queues[sae_id].put(acts_cpu)
 
-        cache.clear()
-        tokens_processed += int(attention_mask.sum().item())
+            cache.clear()
+            tokens_processed += int(attention_mask.sum().item())
 
-        if tokens_processed % 1_000_000 < batch_size * 2048:
-            elapsed = time.monotonic() - start_time
-            rate = tokens_processed / elapsed if elapsed > 0 else 0
-            logger.info(
-                "Producer: %d / %d tokens (%.0f tok/s)",
-                tokens_processed,
-                training_tokens,
-                rate,
-            )
+            if tokens_processed % 1_000_000 < batch_size * 2048:
+                elapsed = time.monotonic() - start_time
+                rate = tokens_processed / elapsed if elapsed > 0 else 0
+                logger.info(
+                    "Producer: %d / %d tokens (%.0f tok/s)",
+                    tokens_processed,
+                    training_tokens,
+                    rate,
+                )
 
-        if tokens_processed >= training_tokens:
-            break
+            if tokens_processed >= training_tokens:
+                break
+    finally:
+        cache._remove_hooks()
 
     # Send sentinels to all workers
     for sae_id in queues:
@@ -498,6 +501,110 @@ def train_batch(
     return failed
 
 
+def quick_quality_check(
+    model: torch.nn.Module,
+    tokenizer,
+    batch_hps: list,
+    output_dir: str,
+    device: str,
+    n_batches: int = 50,
+    min_explained_variance: float = 0.60,
+    min_loss_recovered: float = 0.70,
+    max_dead_feature_pct: float = 40.0,
+) -> dict[str, dict[str, float]]:
+    """Run a fast quality check on just-trained SAEs and abort if quality is bad.
+
+    Args:
+        model: Pre-loaded model (reused from training).
+        tokenizer: Model tokenizer.
+        batch_hps: Hook points from the just-completed batch.
+        output_dir: Base directory for SAE outputs.
+        device: Device for evaluation.
+        n_batches: Number of eval batches (50 ≈ 400K tokens, ~2 min).
+        min_explained_variance: Abort threshold for explained variance.
+        min_loss_recovered: Abort threshold for loss recovered.
+        max_dead_feature_pct: Abort threshold for dead feature percentage.
+
+    Returns:
+        Dict mapping sae_id to its metrics.
+
+    Raises:
+        RuntimeError: If any SAE falls below quality thresholds.
+    """
+    from src.sae.model import TopKSAE
+    from src.sae.quality import compute_reconstruction_metrics
+    from src.data.training_data import SAETrainingDataBuilder
+    from src.sae.config import SAETrainingConfig
+
+    all_metrics = {}
+    failures = []
+
+    for hp in batch_hps:
+        sae_path = Path(output_dir) / hp.sae_id
+        weights_path = sae_path / "weights.safetensors"
+        if not weights_path.exists():
+            logger.warning("Quality check: %s weights not found, skipping.", hp.sae_id)
+            continue
+
+        sae = TopKSAE.load(sae_path, device=device)
+        config = SAETrainingConfig(layer=hp.layer, sae_id=hp.sae_id)
+        data_builder = SAETrainingDataBuilder(tokenizer, config)
+
+        # Quick eval on general chat only (faster than both splits)
+        eval_dataset = data_builder.build_eval_dataset()
+        eval_loader = torch.utils.data.DataLoader(
+            eval_dataset,
+            batch_size=8,
+            collate_fn=lambda batch: {
+                "input_ids": torch.stack([b["input_ids"] for b in batch]),
+                "attention_mask": torch.stack([b["attention_mask"] for b in batch]),
+            },
+        )
+
+        logger.info("Quality check: evaluating %s (layer %d, %d batches)...", hp.sae_id, hp.layer, n_batches)
+        metrics = compute_reconstruction_metrics(
+            model, sae, hp.layer, eval_loader, n_batches=n_batches, device=device,
+        )
+        all_metrics[hp.sae_id] = metrics
+
+        logger.info(
+            "Quality check [%s]: EV=%.3f, LossRecovered=%.3f, Dead=%.1f%%, MSE=%.4f, L0=%.1f",
+            hp.sae_id,
+            metrics["explained_variance"],
+            metrics["loss_recovered"],
+            metrics["dead_feature_pct"],
+            metrics["mse"],
+            metrics["l0_sparsity"],
+        )
+
+        # Check thresholds
+        issues = []
+        if metrics["explained_variance"] < min_explained_variance:
+            issues.append(f"explained_variance={metrics['explained_variance']:.3f} < {min_explained_variance}")
+        if metrics["loss_recovered"] < min_loss_recovered:
+            issues.append(f"loss_recovered={metrics['loss_recovered']:.3f} < {min_loss_recovered}")
+        if metrics["dead_feature_pct"] > max_dead_feature_pct:
+            issues.append(f"dead_feature_pct={metrics['dead_feature_pct']:.1f}% > {max_dead_feature_pct}%")
+
+        if issues:
+            failures.append((hp.sae_id, issues))
+            logger.error("Quality check FAILED for %s: %s", hp.sae_id, "; ".join(issues))
+
+        del sae
+        torch.cuda.empty_cache()
+
+    if failures:
+        msg_parts = [f"  {sae_id}: {'; '.join(issues)}" for sae_id, issues in failures]
+        raise RuntimeError(
+            "SAE quality check failed — aborting before next batch to save GPU time.\n"
+            + "\n".join(msg_parts)
+            + "\nFix training config (learning rate, dict_size, k, training_tokens) and re-run."
+        )
+
+    logger.info("Quality check passed for all %d SAEs in batch.", len(batch_hps))
+    return all_metrics
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Train SAEs in parallel across GPUs",
@@ -647,6 +754,22 @@ def main() -> None:
         )
         all_failed.extend(failed)
 
+        # Quick quality check on just-trained SAEs (skip if batch had failures)
+        successful_hps = [hp for hp in batch_hps if f"sae-{hp.sae_id}" not in failed]
+        if successful_hps and len(batches) > 1:
+            try:
+                quick_quality_check(
+                    model=model,
+                    tokenizer=tokenizer,
+                    batch_hps=successful_hps,
+                    output_dir=args.output_dir,
+                    device=model_device,
+                )
+            except RuntimeError as e:
+                logger.error("Aborting after batch %d/%d: %s", batch_idx + 1, len(batches), e)
+                all_failed.append(f"quality_check_batch_{batch_idx + 1}")
+                break
+
     total_elapsed = time.monotonic() - total_start
 
     if all_failed:
@@ -658,6 +781,31 @@ def main() -> None:
             total_elapsed,
             len(batches),
         )
+
+    # Per-trait reconstruction quality report (runs on all successfully trained SAEs)
+    per_trait_metrics: dict[str, dict[str, dict[str, float]]] = {}
+    successful_hps = [hp for hp in to_train if f"sae-{hp.sae_id}" not in all_failed]
+    if successful_hps:
+        from src.sae.model import TopKSAE
+        from src.sae.quality import compute_per_trait_ev
+
+        logger.info("=== Per-trait reconstruction quality report ===")
+        for hp in successful_hps:
+            sae_path = Path(args.output_dir) / hp.sae_id
+            if not (sae_path / "weights.safetensors").exists():
+                continue
+            sae = TopKSAE.load(sae_path, device=model_device)
+            trait_metrics = compute_per_trait_ev(
+                model, sae, hp.layer, tokenizer, device=model_device,
+            )
+            per_trait_metrics[hp.sae_id] = trait_metrics
+            logger.info(
+                "Per-trait EV for %s: %s",
+                hp.sae_id,
+                {t: f"{m['explained_variance']:.3f}" for t, m in trait_metrics.items()},
+            )
+            del sae
+            torch.cuda.empty_cache()
 
     # Write manifest
     results_dir = Path(args.results_dir)
@@ -672,6 +820,7 @@ def main() -> None:
         "sae_ids": sae_ids,
         "device_assignment": all_devices,
         "failed": all_failed,
+        "per_trait_ev": per_trait_metrics,
     }
     with open(results_dir / "03_train_saes.json", "w") as f:
         json.dump(manifest, f, indent=2)

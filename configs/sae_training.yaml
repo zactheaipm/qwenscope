@@ -1,7 +1,7 @@
 sae_type: "topk"
-dictionary_size: 40960      # 8× hidden_dim
+dictionary_size: 16384      # 8x hidden_dim (2048 * 8)
 topk: 64
-learning_rate: 5.0e-5
+learning_rate: 3.0e-5       # Default; per-hook overrides below scale LR inversely with activation norm
 lr_warmup_steps: 1000
 batch_size: 4096
 training_tokens: 200_000_000
@@ -9,73 +9,84 @@ checkpoint_every_tokens: 50_000_000
 seed: 42
 
 hook_points:
-  # --- Early (block 2, ActNorm ~40-46) ---
-  # Previous run: 58-64% dead features, EV ~0.51-0.53 with k=64/dict=40960.
-  # Fix: denser coding (k=128) + smaller dict (4× hidden_dim instead of 8×)
-  # + less aggressive resampling since resample events hurt EV at early layers.
+  # --- Early (block 1, layers 4-7) ---
+  # Denser coding (k=128) and smaller dict (4x) at early layers.
+  # Activation norms ~2.3-2.8 → LR=3e-5 (default).
   sae_delta_early:
-    layer: 10
+    layer: 6
     type: "deltanet"
-    block: 2
+    block: 1
     position: 2
     topk: 128
-    dictionary_size: 20480
+    dictionary_size: 8192
+    learning_rate: 3.0e-5
     resample_every_n_steps: 10000
   sae_attn_early:
-    layer: 11
+    layer: 7
     type: "attention"
-    block: 2
+    block: 1
     position: 3
     topk: 128
-    dictionary_size: 20480
+    dictionary_size: 8192
+    learning_rate: 3.0e-5
     resample_every_n_steps: 10000
 
-  # --- Early-mid (block 5, ActNorm ~61) ---
-  # Previous run: 16% dead, EV ~0.68. Healthy — use k=96 as middle ground.
+  # --- Early-mid (block 3, layers 12-15) ---
+  # k=96 as middle ground. Activation norms ~4.9-5.1 → LR=2e-5.
   sae_delta_earlymid:
+    layer: 14
+    type: "deltanet"
+    block: 3
+    position: 2
+    topk: 96
+    learning_rate: 2.0e-5
+  sae_attn_earlymid:
+    layer: 15
+    type: "attention"
+    block: 3
+    position: 3
+    topk: 96
+    learning_rate: 2.0e-5
+
+  # --- Mid (block 5, layers 20-23) ---
+  # Activation norms ~5.6-6.1 → LR=1e-5.
+  sae_delta_mid_pos1:
+    layer: 21
+    type: "deltanet"
+    block: 5
+    position: 1
+    learning_rate: 1.0e-5
+    description: "Control: position-in-block comparison"
+  sae_delta_mid:
     layer: 22
     type: "deltanet"
     block: 5
     position: 2
-    topk: 96
-  sae_attn_earlymid:
+    learning_rate: 1.0e-5
+  sae_attn_mid:
     layer: 23
     type: "attention"
     block: 5
     position: 3
-    topk: 96
+    learning_rate: 1.0e-5
 
-  # --- Mid (block 8) --- defaults: k=64, dict=40960
-  sae_delta_mid_pos1:
-    layer: 33
-    type: "deltanet"
-    block: 8
-    position: 1
-    description: "Control: position-in-block comparison"
-  sae_delta_mid:
+  # --- Late (block 8, layers 32-35) ---
+  # Activation norms ~8.1-8.6 → LR=8e-6.
+  sae_delta_late:
     layer: 34
     type: "deltanet"
     block: 8
     position: 2
-  sae_attn_mid:
+    learning_rate: 8.0e-6
+  sae_attn_late:
     layer: 35
     type: "attention"
     block: 8
     position: 3
+    learning_rate: 8.0e-6
 
-  # --- Late (block 13) --- defaults: k=64, dict=40960
-  sae_delta_late:
-    layer: 54
-    type: "deltanet"
-    block: 13
-    position: 2
-  sae_attn_late:
-    layer: 55
-    type: "attention"
-    block: 13
-    position: 3
-
-buffer_capacity: 500_000       # Shuffle window: 500K tokens (~5 GB BF16 on CPU)
+# Buffer: 2M vectors x 2048 x 2 bytes = ~8 GB CPU (was ~20 GB with 5120-dim)
+buffer_capacity: 2_000_000
 resample_every_n_steps: 5_000  # ~10 resampling events over 200M-token run
 
 training_data:
