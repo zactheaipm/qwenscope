@@ -24,9 +24,10 @@ DTYPE_MAP: dict[str, torch.dtype] = {
 def get_layers_module(model: torch.nn.Module) -> torch.nn.ModuleList:
     """Resolve the transformer layers module from any supported model class.
 
-    Qwen 3.5 models come in two variants:
-      - CausalLM (27B): layers at model.model.layers
-      - VLM/MoE (35B-A3B): layers at model.model.text_model.layers
+    Qwen 3.5 models come in several variants:
+      - CausalLM (35B-A3B): layers at model.model.layers
+        (Qwen3_5MoeForCausalLM)
+      - VLM variants: layers at model.model.text_model.layers
         (Qwen3_5MoeForConditionalGeneration wraps text in a text_model)
 
     This function probes for the correct path so that hooks.py, steering,

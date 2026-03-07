@@ -9,6 +9,25 @@ import yaml
 from pydantic import BaseModel
 
 
+class ModelSpec:
+    """Centralized model identity constants for Qwen 3.5-35B-A3B.
+
+    Import these wherever model metadata is needed (release packaging,
+    cost estimation, tests, documentation) to avoid stale hardcoded values.
+    """
+
+    MODEL_NAME = "Qwen 3.5-35B-A3B"
+    BASE_MODEL_HF_ID = "Qwen/Qwen3.5-35B-A3B"
+    HIDDEN_DIM = 2048
+    N_LAYERS = 40
+    N_BLOCKS = 10
+    BLOCK_PATTERN = "3+1"  # 3 DeltaNet + 1 Attention per block
+    N_DELTANET_LAYERS = 30
+    N_ATTENTION_LAYERS = 10
+    DEFAULT_DICT_SIZE = 16384  # 8x expansion
+    EARLY_DICT_SIZE = 8192  # 4x expansion
+
+
 class LayerType(str, Enum):
     """Layer type in the Qwen 3.5 hybrid architecture."""
 
@@ -153,6 +172,22 @@ HOOK_POINTS: list[HookPoint] = [
 
 HOOK_POINTS_BY_ID: dict[str, HookPoint] = {hp.sae_id: hp for hp in HOOK_POINTS}
 HOOK_LAYERS: list[int] = [hp.layer for hp in HOOK_POINTS]
+
+# Map block numbers to depth band names. Derived from HOOK_POINTS so it
+# stays in sync as hook points are added/moved.
+BLOCK_TO_DEPTH_BAND: dict[int, str] = {1: "early", 3: "earlymid", 5: "mid", 8: "late"}
+
+# Map sae_id to depth band, derived from HOOK_POINTS metadata.
+SAE_DEPTH_BAND: dict[str, str] = {
+    hp.sae_id: BLOCK_TO_DEPTH_BAND.get(hp.block, f"block{hp.block}")
+    for hp in HOOK_POINTS
+}
+
+# Group SAE IDs by depth band.
+DEPTH_BAND_SAES: dict[str, set[str]] = {}
+for _hp in HOOK_POINTS:
+    _band = BLOCK_TO_DEPTH_BAND.get(_hp.block, f"block{_hp.block}")
+    DEPTH_BAND_SAES.setdefault(_band, set()).add(_hp.sae_id)
 
 
 def validate_configs_agree(model_cfg: ModelConfig, arch_cfg: Qwen35Config) -> None:

@@ -93,12 +93,14 @@ class TopKSAE(nn.Module):
         # Project to feature space
         latents = self.encoder(x_centered)  # (..., dict_size)
 
-        # TopK sparsification: keep only top-k values, zero the rest.
-        # Clamp to non-negative: negative feature activations are theoretically
-        # unsound for monosemanticity (a "feature" firing negatively means it fires
-        # against its direction). ReLU after selection is the standard fix.
+        # ReLU before TopK: negative feature activations are theoretically
+        # unsound for monosemanticity (a "feature" firing negatively means it
+        # fires against its learned direction). Applying ReLU BEFORE TopK
+        # selection ensures that only genuinely active features compete for
+        # the k active slots. The alternative (TopK then clamp) wastes slots
+        # on features that become zero after clamping.
+        latents = latents.clamp(min=0)
         topk_values, topk_indices = torch.topk(latents, self.k, dim=-1)
-        topk_values = topk_values.clamp(min=0)
 
         # Create sparse output
         sparse_features = torch.zeros_like(latents)

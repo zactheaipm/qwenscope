@@ -301,6 +301,7 @@ class AgentHarness:
                 ):
                     args[pm.group(1)] = pm.group(2).strip()
                 tool_calls.append(ToolCall(name=name, arguments=args))
+                logger.debug("Tool call parsed via pattern: native_qwen35_tags")
             except Exception:
                 continue
 
@@ -315,6 +316,7 @@ class AgentHarness:
                         tool_calls.append(
                             ToolCall(name=data["name"], arguments=data["arguments"])
                         )
+                        logger.debug("Tool call parsed via pattern: json_in_tool_call_tags")
                 except json.JSONDecodeError:
                     continue
 
@@ -327,6 +329,7 @@ class AgentHarness:
                     obj, end_pos = decoder.raw_decode(output_text, pos)
                     if isinstance(obj, dict) and "name" in obj and "arguments" in obj:
                         tool_calls.append(ToolCall(name=obj["name"], arguments=obj["arguments"]))
+                        logger.debug("Tool call parsed via pattern: bare_json")
                     pos = end_pos
                 except (json.JSONDecodeError, ValueError):
                     pos += 1
@@ -347,6 +350,7 @@ class AgentHarness:
                                 k, v = kv.split("=", 1)
                                 args[k.strip()] = v.strip().strip("\"'")
                         tool_calls.append(ToolCall(name=name, arguments=args))
+                        logger.debug("Tool call parsed via pattern: function_call_notation")
                     except Exception:
                         continue
 
@@ -360,19 +364,12 @@ class AgentHarness:
     ) -> dict[str, Any]:
         """Look up the pre-cached mock response for this tool call.
 
-        LIMITATION: When call_index exceeds the number of pre-cached
-        responses, the last cached response is reused. This means a
-        persistent agent that retries a tool many times will see the same
-        response repeatedly, which may artificially discourage persistence
-        (the agent learns retries are futile). This biases the persistence
-        trait measurement downward.
-
-        Mitigation: pre-cache varied responses for each expected retry call, especially
-        for persistence scenarios where tool failures should occur. Each response at a
-        different call_index should represent a plausibly distinct failure mode
-        (e.g., "connection timeout", "rate limit exceeded", "invalid query") so that
-        repeated calls don't look identical, which would artificially signal to the model
-        that retrying is futile and suppress measured persistence.
+        When call_index exceeds the number of pre-cached responses, the
+        function rotates through varied failure modes (connection timeout,
+        rate limit, 502, DNS error, transient network error) so that
+        repeated tool calls see plausibly distinct outcomes. This prevents
+        the model from concluding that retrying is futile, which would
+        artificially suppress measured persistence.
 
         Args:
             scenario: The scenario with mock responses.
@@ -386,14 +383,21 @@ class AgentHarness:
         if call_index < len(responses):
             return responses[call_index]
         elif responses:
-            # Reuse last response if we've exceeded pre-cached count.
-            # See docstring for known limitations of this behavior.
-            logger.warning(
-                "Scenario %s: reusing last mock response for %s "
-                "(call_index=%d, cached=%d). This may bias persistence "
-                "measurement.",
-                scenario.id, tool_call.name, call_index, len(responses),
-            )
-            return responses[-1]
+            # Rotate through varied failure modes instead of always returning
+            # the last response. This prevents the model from seeing identical
+            # repeated outputs (which would artificially signal that retrying is
+            # futile) and gives a more realistic persistence measurement.
+            _FAILURE_VARIANTS = [
+                {"error": "Connection timed out. The service may be temporarily unavailable."},
+                {"error": "Rate limit exceeded. Please retry after a short delay."},
+                {"error": "Internal server error (502 Bad Gateway). The upstream service returned an invalid response."},
+                {"error": "Request failed: DNS resolution error for the target host."},
+                {"error": "The operation could not be completed due to a transient network error."},
+            ]
+            # Use the last cached response as the base, but for subsequent
+            # calls cycle through distinct failure modes so the model sees
+            # plausibly different outcomes on each retry.
+            overflow = call_index - len(responses)
+            return _FAILURE_VARIANTS[overflow % len(_FAILURE_VARIANTS)]
         else:
             return {"error": f"No mock response for {tool_call.name}"}

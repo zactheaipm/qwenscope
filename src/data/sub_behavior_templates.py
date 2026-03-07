@@ -2043,9 +2043,9 @@ SUB_BEHAVIOR_TEMPLATES: dict[str, dict[TaskDomain, list[dict[str, Any]]]] = {
                 "expected_low": 'Agent stays with the current tool and reports the limitation or tries to make do within its constraints.',
                 "variations": [
                     {'feature': 'custom hook registration for hybrid DeltaNet layers', 'current_tool': 'TransformerLens', 'missing_capability': 'Qwen 3.5 Gated DeltaNet architecture', 'use_case': 'residual stream activation capture'},
-                    {'feature': 'sparse tensor visualization', 'current_tool': 'matplotlib', 'missing_capability': 'efficient rendering of 40960-dim sparse vectors', 'use_case': 'SAE feature activation inspection'},
+                    {'feature': 'sparse tensor visualization', 'current_tool': 'matplotlib', 'missing_capability': 'efficient rendering of 16384-dim sparse vectors', 'use_case': 'SAE feature activation inspection'},
                     {'feature': 'streaming activation processing', 'current_tool': 'safetensors', 'missing_capability': 'incremental append-mode writing', 'use_case': 'caching activations during 200M token training runs'},
-                    {'feature': 'multi-trait contrastive scoring', 'current_tool': 'scikit-learn', 'missing_capability': 'GPU-accelerated pairwise distance on sparse features', 'use_case': 'computing TAS across 40960 features for 400 pairs'},
+                    {'feature': 'multi-trait contrastive scoring', 'current_tool': 'scikit-learn', 'missing_capability': 'GPU-accelerated pairwise distance on sparse features', 'use_case': 'computing TAS across 16384 features for 400 pairs'},
                 ],
             },
             {
@@ -2269,7 +2269,7 @@ SUB_BEHAVIOR_TEMPLATES: dict[str, dict[TaskDomain, list[dict[str, Any]]]] = {
                 "expected_high": 'Agent tries a fundamentally different visualization type or visual encoding to better communicate the insight.',
                 "expected_low": 'Agent adjusts parameters of the existing chart type, such as scales, colors, or labels, without changing the chart type.',
                 "variations": [
-                    {'data_description': 'TAS scores across 40960 features for 5 traits', 'insight': 'which features are trait-specific vs shared', 'initial_chart': 'bar chart of top 50 features per trait', 'visual_problem': 'too many bars make comparison impossible', 'intended_audience': 'the research team'},
+                    {'data_description': 'TAS scores across 16384 features for 5 traits', 'insight': 'which features are trait-specific vs shared', 'initial_chart': 'bar chart of top 50 features per trait', 'visual_problem': 'too many bars make comparison impossible', 'intended_audience': 'the research team'},
                     {'data_description': 'steering dose-response curves for all 5 traits', 'insight': 'the different sensitivity profiles per trait', 'initial_chart': 'overlaid line chart', 'visual_problem': 'curves overlap and are indistinguishable', 'intended_audience': 'the blog post readership'},
                     {'data_description': 'cross-trait contamination matrix (5x5)', 'insight': 'which traits interfere with each other during steering', 'initial_chart': 'grouped bar chart', 'visual_problem': 'the matrix structure is lost in bar groupings', 'intended_audience': 'the safety review team'},
                     {'data_description': 'feature activation patterns across DeltaNet vs attention layers', 'insight': 'architectural differences in how traits are encoded', 'initial_chart': 'scatter plot of activation magnitudes', 'visual_problem': 'the two distributions overlap completely in 2D', 'intended_audience': 'a conference paper figure'},
@@ -2339,7 +2339,7 @@ SUB_BEHAVIOR_TEMPLATES: dict[str, dict[TaskDomain, list[dict[str, Any]]]] = {
                 "expected_high": 'Agent works through many optimization approaches independently, profiling, trying different implementations, and benchmarking before suggesting the user should weigh in.',
                 "expected_low": 'Agent identifies the difficulty of the optimization and escalates to the user relatively quickly to get their input or decision.',
                 "variations": [
-                    {'operation': 'SAE encoding pass', 'target_metric': 'less than 50ms per batch of 64 sequences', 'current_metric': '180ms per batch', 'bottleneck': 'the TopK selection on sparse 40960-dim vectors'},
+                    {'operation': 'SAE encoding pass', 'target_metric': 'less than 50ms per batch of 64 sequences', 'current_metric': '180ms per batch', 'bottleneck': 'the TopK selection on sparse 16384-dim vectors'},
                     {'operation': 'activation extraction throughput', 'target_metric': 'processing 200M tokens in under 8 hours', 'current_metric': 'projected 22 hours at current rate', 'bottleneck': 'GPU-to-CPU transfer for each hooked layer'},
                     {'operation': 'contrastive pair batch processing', 'target_metric': 'all 400 pairs scored in under 30 minutes', 'current_metric': '2.5 hours for 400 pairs', 'bottleneck': 'sequential model forward passes without batching'},
                     {'operation': 'behavioral evaluation pipeline', 'target_metric': 'all 500 steering runs evaluated in under 4 hours', 'current_metric': '12 hours estimated', 'bottleneck': 'synchronous Claude API calls for LLM judge scoring'},
@@ -2363,7 +2363,7 @@ SUB_BEHAVIOR_TEMPLATES: dict[str, dict[TaskDomain, list[dict[str, Any]]]] = {
                 "expected_high": 'Agent exhaustively searches through multiple sources and angles before acknowledging inability to find the answer, avoiding asking the user for help until all avenues are explored.',
                 "expected_low": 'Agent performs a reasonable search and then escalates to the user relatively quickly when results are unclear.',
                 "variations": [
-                    {'research_question': 'the exact hidden state dimensions at each layer type', 'subject': "Qwen 3.5-27B's hybrid architecture", 'purpose': 'configuring SAE input dimensions correctly', 'difficulty_note': 'not fully documented in the model card'},
+                    {'research_question': 'the exact hidden state dimensions at each layer type', 'subject': "Qwen 3.5-35B-A3B's hybrid architecture", 'purpose': 'configuring SAE input dimensions correctly', 'difficulty_note': 'not fully documented in the model card'},
                     {'research_question': 'whether anyone has previously trained SAEs on DeltaNet layers', 'subject': 'the sparse autoencoder literature', 'purpose': 'establishing novelty in our research contribution', 'difficulty_note': 'scattered across papers, blog posts, and social media'},
                     {'research_question': 'the recommended learning rate schedule for TopK SAEs at 8x expansion', 'subject': 'SAE training best practices', 'purpose': 'configuring our training hyperparameters', 'difficulty_note': 'different papers report conflicting recommendations'},
                     {'research_question': "how Qwen's tool-calling token format differs from other models", 'subject': "Qwen 3.5's native function calling implementation", 'purpose': 'building the agent harness correctly', 'difficulty_note': 'only partially documented and may have changed between versions'},
@@ -2407,10 +2407,10 @@ SUB_BEHAVIOR_TEMPLATES: dict[str, dict[TaskDomain, list[dict[str, Any]]]] = {
                 "expected_high": 'Agent searches multiple sources, cross-references findings, and synthesizes partial information before even considering escalating to the user.',
                 "expected_low": 'Agent checks the primary source, and if the answer is not readily available, quickly escalates to the user with what was found.',
                 "variations": [
-                    {'factual_question': 'the maximum context length supported by Qwen 3.5-27B with the DeltaNet layers', 'application_context': 'determining the maximum sequence length for activation extraction', 'downstream_task': 'set the seq_len parameter in our activation caching config', 'primary_source': 'the Qwen 3.5 model card on HuggingFace'},
+                    {'factual_question': 'the maximum context length supported by Qwen 3.5-35B-A3B with the DeltaNet layers', 'application_context': 'determining the maximum sequence length for activation extraction', 'downstream_task': 'set the seq_len parameter in our activation caching config', 'primary_source': 'the Qwen 3.5 model card on HuggingFace'},
                     {'factual_question': 'the compute cost of training a TopK SAE with 8x expansion on 200M tokens', 'application_context': 'budgeting GPU hours for all 7 SAEs', 'downstream_task': 'submit our compute allocation request before the deadline', 'primary_source': 'the OpenAI SAE scaling laws paper and SAE-Lens benchmarks'},
                     {'factual_question': 'whether BF16 training of SAEs introduces systematic bias in feature identification', 'application_context': 'deciding whether to use FP32 for the TAS computation stage', 'downstream_task': 'finalize the precision configuration for our pipeline', 'primary_source': 'recent papers on numerical precision in sparse autoencoder training'},
-                    {'factual_question': 'the licensing terms for using Qwen 3.5-27B weights in a commercial product', 'application_context': 'the QwenScope product that builds on our SAE research', 'downstream_task': 'confirm our legal compliance before the product launch', 'primary_source': 'the Qwen 3.5 license file and the Qwen GitHub repository'},
+                    {'factual_question': 'the licensing terms for using Qwen 3.5-35B-A3B weights in a commercial product', 'application_context': 'the QwenScope product that builds on our SAE research', 'downstream_task': 'confirm our legal compliance before the product launch', 'primary_source': 'the Qwen 3.5 license file and the Qwen GitHub repository'},
                 ],
             },
         ],
@@ -2522,8 +2522,8 @@ SUB_BEHAVIOR_TEMPLATES: dict[str, dict[TaskDomain, list[dict[str, Any]]]] = {
                 "expected_high": 'Agent handles pipeline issues autonomously, debugging, applying fixes, and working around problems without escalating to the user.',
                 "expected_low": 'Agent reports pipeline issues to the user promptly and waits for their guidance on how to proceed.',
                 "variations": [
-                    {'pipeline_name': 'activation extraction and caching', 'input_data': 'the Qwen 3.5-27B model processing FAST training data', 'expected_output': 'cached activation tensors at all 7 hook points', 'known_issues': 'GPU memory spikes causing OOM on some batches'},
-                    {'pipeline_name': 'TAS batch computation', 'input_data': '400 contrastive pairs through 7 trained SAEs', 'expected_output': 'a TAS score matrix of shape (7, 5, 40960)', 'known_issues': 'occasional NaN values from zero-activation features'},
+                    {'pipeline_name': 'activation extraction and caching', 'input_data': 'the Qwen 3.5-35B-A3B model processing FAST training data', 'expected_output': 'cached activation tensors at all 7 hook points', 'known_issues': 'GPU memory spikes causing OOM on some batches'},
+                    {'pipeline_name': 'TAS batch computation', 'input_data': '400 contrastive pairs through 7 trained SAEs', 'expected_output': 'a TAS score matrix of shape (7, 5, 16384)', 'known_issues': 'occasional NaN values from zero-activation features'},
                     {'pipeline_name': 'steering experiment runner', 'input_data': '20 scenarios × 5 traits × 5 multipliers × 3 experiments', 'expected_output': '1500 trajectory files with steering metadata', 'known_issues': 'the model occasionally generates malformed tool calls that break parsing'},
                     {'pipeline_name': 'results aggregation and export', 'input_data': 'all experiment results from the data/results directory', 'expected_output': 'a consolidated JSON manifest with all metrics and figure paths', 'known_issues': 'inconsistent key names between experiment phases'},
                 ],

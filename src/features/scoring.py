@@ -628,11 +628,11 @@ def compute_all_parametric_pvalues(
     dict_size = len(pair_results[0].features_high_mean)
     n_pairs = len(pair_results)
 
-    # Shape: (dict_size, n_pairs)
-    highs = np.array([[r.features_high_mean[i] for r in pair_results]
-                      for i in range(dict_size)])
-    lows = np.array([[r.features_low_mean[i] for r in pair_results]
-                     for i in range(dict_size)])
+    # Build (n_pairs, dict_size) from the natural data layout, then transpose.
+    # The previous implementation iterated O(dict_size * n_pairs) in Python;
+    # this builds the array in O(n_pairs) Python iterations + one numpy transpose.
+    highs = np.array([r.features_high_mean for r in pair_results]).T  # (dict_size, n_pairs)
+    lows = np.array([r.features_low_mean for r in pair_results]).T    # (dict_size, n_pairs)
 
     diffs = highs - lows                          # (dict_size, n_pairs)
     means = diffs.mean(axis=1)                    # (dict_size,)
@@ -858,6 +858,158 @@ def compute_all_sub_behavior_tas(
             all_sub_tas[sub_behavior][sae_id] = (tas, n, fallback)
 
     return all_sub_tas
+
+
+# ---------------------------------------------------------------------------
+# Sub-behavior correlation structure
+# ---------------------------------------------------------------------------
+
+
+def compute_sub_behavior_correlations(
+    all_sub_tas: dict[str, dict[str, tuple[torch.Tensor | None, int, bool]]],
+    sae_id: str,
+) -> dict[str, dict[str, float]]:
+    """Compute pairwise Pearson correlations between sub-behavior TAS vectors.
+
+    Sub-behaviors within a trait (e.g., decision_independence and action_initiation
+    in AUTONOMY) are expected to be naturally correlated because the contrastive
+    templates may not manipulate them fully independently.  This function measures
+    the empirical correlation structure so that:
+
+    1. Highly correlated sub-behaviors (r > 0.8) are flagged as potentially
+       non-separable — the templates may not provide enough contrast to
+       distinguish them, and their TAS vectors may identify the same features.
+    2. Low within-trait correlations (r < 0.3) provide evidence that the
+       sub-behavior decomposition captures genuinely distinct behavioral axes.
+    3. High cross-trait correlations flag measurement contamination — a
+       sub-behavior that correlates with sub-behaviors from other traits may
+       be encoding a shared construct (e.g., general instruction-sensitivity).
+
+    Args:
+        all_sub_tas: Output of ``compute_all_sub_behavior_tas()``.
+            Maps ``sub_behavior -> sae_id -> (tas_tensor, n_pairs, used_fallback)``.
+        sae_id: Which SAE to compute correlations for.
+
+    Returns:
+        Nested dict: ``sub_behavior_a -> sub_behavior_b -> pearson_r``.
+        Only includes pairs where both sub-behaviors have valid (non-None) TAS.
+    """
+    # Collect valid TAS vectors
+    valid: dict[str, torch.Tensor] = {}
+    for sub_key, sae_results in all_sub_tas.items():
+        if sae_id not in sae_results:
+            continue
+        tas, _, fallback = sae_results[sae_id]
+        if tas is not None and not fallback:
+            valid[sub_key] = tas
+
+    if len(valid) < 2:
+        logger.warning(
+            "Need >= 2 valid sub-behavior TAS vectors for correlation; "
+            "got %d for SAE %s",
+            len(valid), sae_id,
+        )
+        return {}
+
+    sub_keys = sorted(valid.keys())
+    correlations: dict[str, dict[str, float]] = {}
+
+    for i, key_a in enumerate(sub_keys):
+        correlations[key_a] = {}
+        vec_a = valid[key_a].float().numpy()
+        for j, key_b in enumerate(sub_keys):
+            if i == j:
+                correlations[key_a][key_b] = 1.0
+                continue
+            vec_b = valid[key_b].float().numpy()
+            r, _ = stats.pearsonr(vec_a, vec_b)
+            correlations[key_a][key_b] = float(r)
+
+    # Log summary: within-trait and cross-trait correlations
+    within_rs = []
+    cross_rs = []
+    for key_a in sub_keys:
+        trait_a = key_a.split(".")[0]
+        for key_b in sub_keys:
+            if key_a >= key_b:
+                continue
+            r = correlations[key_a][key_b]
+            trait_b = key_b.split(".")[0]
+            if trait_a == trait_b:
+                within_rs.append(r)
+            else:
+                cross_rs.append(r)
+
+    if within_rs:
+        logger.info(
+            "Sub-behavior correlations (SAE %s): within-trait mean r=%.3f "
+            "(range [%.3f, %.3f]), %d pairs",
+            sae_id,
+            np.mean(within_rs),
+            min(within_rs),
+            max(within_rs),
+            len(within_rs),
+        )
+    if cross_rs:
+        logger.info(
+            "Sub-behavior correlations (SAE %s): cross-trait mean r=%.3f "
+            "(range [%.3f, %.3f]), %d pairs",
+            sae_id,
+            np.mean(cross_rs),
+            min(cross_rs),
+            max(cross_rs),
+            len(cross_rs),
+        )
+
+    return correlations
+
+
+def flag_inseparable_sub_behaviors(
+    correlations: dict[str, dict[str, float]],
+    threshold: float = 0.8,
+) -> list[tuple[str, str, float]]:
+    """Identify sub-behavior pairs whose TAS correlation exceeds a threshold.
+
+    High within-trait correlation (r > threshold) suggests the contrastive
+    templates do not independently manipulate these sub-behaviors. Their TAS
+    vectors will identify overlapping feature sets, and steering one will
+    likely affect the other.
+
+    This is expected for some pairs (e.g., decision_independence and
+    permission_avoidance are conceptually linked). The point is to *report*
+    the correlation structure, not to eliminate it.
+
+    Args:
+        correlations: Output of ``compute_sub_behavior_correlations()``.
+        threshold: Minimum |r| to flag a pair as inseparable.
+
+    Returns:
+        List of (sub_a, sub_b, r) tuples sorted by |r| descending.
+    """
+    flagged: list[tuple[str, str, float]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for key_a, inner in correlations.items():
+        for key_b, r in inner.items():
+            if key_a == key_b:
+                continue
+            pair = tuple(sorted([key_a, key_b]))
+            if pair in seen:
+                continue
+            seen.add(pair)
+            if abs(r) >= threshold:
+                flagged.append((pair[0], pair[1], r))
+
+    flagged.sort(key=lambda x: abs(x[2]), reverse=True)
+
+    if flagged:
+        logger.warning(
+            "Inseparable sub-behaviors (|r| >= %.2f): %s",
+            threshold,
+            [(a, b, f"{r:.3f}") for a, b, r in flagged],
+        )
+
+    return flagged
 
 
 # ---------------------------------------------------------------------------

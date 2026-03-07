@@ -132,6 +132,8 @@ def score_steering_results(
         flat_results = list(results)
 
     total = len(flat_results)
+    n_failures = 0
+    max_failure_rate = 0.5
     for i, result in enumerate(flat_results):
         if result.behavioral_score is not None:
             # Already scored — skip to keep the function idempotent.
@@ -143,6 +145,13 @@ def score_steering_results(
                 result.scenario_id,
                 result.trait.value,
             )
+            n_failures += 1
+            if i >= 9 and n_failures / (i + 1) > max_failure_rate:
+                logger.error(
+                    "Aborting: failure rate %.0f%% exceeds %.0f%% threshold after %d results",
+                    100 * n_failures / (i + 1), 100 * max_failure_rate, i + 1,
+                )
+                break
             continue
 
         try:
@@ -153,6 +162,13 @@ def score_steering_results(
                 result.scenario_id,
                 exc,
             )
+            n_failures += 1
+            if i >= 9 and n_failures / (i + 1) > max_failure_rate:
+                logger.error(
+                    "Aborting: failure rate %.0f%% exceeds %.0f%% threshold after %d results",
+                    100 * n_failures / (i + 1), 100 * max_failure_rate, i + 1,
+                )
+                break
             continue
 
         if i > 0:
@@ -169,11 +185,18 @@ def score_steering_results(
                 result.trait.value,
                 exc,
             )
+            n_failures += 1
+            if i >= 9 and n_failures / (i + 1) > max_failure_rate:
+                logger.error(
+                    "Aborting: failure rate %.0f%% exceeds %.0f%% threshold after %d results",
+                    100 * n_failures / (i + 1), 100 * max_failure_rate, i + 1,
+                )
+                break
 
         if (i + 1) % 10 == 0:
             logger.info("score_steering_results: %d / %d scored", i + 1, total)
 
-    logger.info("score_steering_results: complete (%d results processed)", total)
+    logger.info("score_steering_results: complete (%d results processed, %d failures)", total, n_failures)
 
 
 class SteeringExperimentRunner:
@@ -390,17 +413,17 @@ class SteeringExperimentRunner:
                 )
 
             results = []
-            for scenario in scenarios:
-                with multi_engine.active():
+            with multi_engine.active():
+                for scenario in scenarios:
                     trajectory = agent_harness.run_scenario(scenario)
-                results.append(SteeringResult(
-                    scenario_id=scenario.id,
-                    trait=trait,
-                    multiplier=multiplier,
-                    sae_id=condition_name,
-                    feature_indices=[],
-                    trajectory=trajectory.model_dump() if hasattr(trajectory, "model_dump") else {},
-                ))
+                    results.append(SteeringResult(
+                        scenario_id=scenario.id,
+                        trait=trait,
+                        multiplier=multiplier,
+                        sae_id=condition_name,
+                        feature_indices=[],
+                        trajectory=trajectory.model_dump() if hasattr(trajectory, "model_dump") else {},
+                    ))
 
             logger.info("  %s: %d scenarios complete", condition_name, len(results))
             return results
@@ -463,17 +486,17 @@ class SteeringExperimentRunner:
                 )
 
             results = []
-            for scenario in scenarios:
-                with multi_engine.active():
+            with multi_engine.active():
+                for scenario in scenarios:
                     trajectory = agent_harness.run_scenario(scenario)
-                results.append(SteeringResult(
-                    scenario_id=scenario.id,
-                    trait=trait,
-                    multiplier=multiplier,
-                    sae_id=depth_name,
-                    feature_indices=[],
-                    trajectory=trajectory.model_dump() if hasattr(trajectory, "model_dump") else {},
-                ))
+                    results.append(SteeringResult(
+                        scenario_id=scenario.id,
+                        trait=trait,
+                        multiplier=multiplier,
+                        sae_id=depth_name,
+                        feature_indices=[],
+                        trajectory=trajectory.model_dump() if hasattr(trajectory, "model_dump") else {},
+                    ))
 
             all_depth_results[depth_name] = results
             logger.info("  %s: %d scenarios complete", depth_name, len(results))
@@ -584,6 +607,13 @@ class SteeringExperimentRunner:
         Steers at the source layer and measures the change in feature activations
         at the target layer. Useful for understanding whether DeltaNet layers
         influence downstream attention layers (or vice versa).
+
+        This measurement is especially important for DeltaNet source layers:
+        the gated linear recurrence propagates perturbations differently than
+        attention, so the empirical cross-layer effect may be non-linearly
+        amplified or dampened.  Large ``mean_activation_change`` from DeltaNet
+        steering suggests the recurrence amplifies the intervention; low values
+        suggest the gate dampens it.
 
         NOTE: Multi-layer steering creates interaction effects — steering at
         layer 34 changes the input to layer 35's SAE. This method isolates

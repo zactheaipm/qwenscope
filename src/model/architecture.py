@@ -1,4 +1,4 @@
-"""Utility functions for Qwen 3.5-27B architecture analysis."""
+"""Utility functions for Qwen 3.5-35B-A3B architecture analysis."""
 
 from __future__ import annotations
 
@@ -40,37 +40,67 @@ def get_hook_points_from_config(config_path: str | Path) -> list[HookPoint]:
 
 def get_matched_pairs(
     hook_points: list[HookPoint] | None = None,
-) -> list[tuple[HookPoint, HookPoint]]:
+) -> tuple[list[tuple[HookPoint, HookPoint]], list[HookPoint]]:
     """Return matched DeltaNet/Attention pairs at the same depth.
+
+    For each block that has both DeltaNet and Attention hook points, pairs
+    the canonical DeltaNet (highest layer index, i.e. position 2 — the last
+    DeltaNet before the attention layer) with the attention hook point.
+
+    Any hook points that are not part of a matched pair (e.g. the control
+    SAE ``sae_delta_mid_pos1`` at position 1 of block 5) are returned in
+    the second element of the tuple.
 
     Args:
         hook_points: List of hook points. Defaults to canonical HOOK_POINTS.
 
     Returns:
-        List of (attention_hp, deltanet_hp) tuples at matching blocks.
+        Tuple of:
+          - List of (attention_hp, deltanet_hp) tuples at matching blocks.
+          - List of unmatched hook points (controls / extras).
     """
     if hook_points is None:
         hook_points = HOOK_POINTS
 
-    # Group by block
-    by_block: dict[int, dict[LayerType, HookPoint]] = {}
+    # Group by block, collecting *all* hook points per type (not just one).
+    by_block: dict[int, dict[LayerType, list[HookPoint]]] = {}
     for hp in hook_points:
-        by_block.setdefault(hp.block, {})[hp.layer_type] = hp
+        by_block.setdefault(hp.block, {}).setdefault(hp.layer_type, []).append(hp)
 
-    pairs = []
+    pairs: list[tuple[HookPoint, HookPoint]] = []
+    unmatched: list[HookPoint] = []
+
     for block in sorted(by_block.keys()):
         block_hps = by_block[block]
-        if LayerType.ATTENTION in block_hps and LayerType.DELTANET in block_hps:
-            pairs.append((block_hps[LayerType.ATTENTION], block_hps[LayerType.DELTANET]))
+        attn_list = block_hps.get(LayerType.ATTENTION, [])
+        delta_list = block_hps.get(LayerType.DELTANET, [])
 
-    return pairs
+        if attn_list and delta_list:
+            # Pick the canonical DeltaNet: highest layer index (position 2,
+            # the last DeltaNet before the attention layer in the block).
+            delta_sorted = sorted(delta_list, key=lambda h: h.layer)
+            canonical_delta = delta_sorted[-1]
+            attn_hp = attn_list[0]  # Only one attention per block
+            pairs.append((attn_hp, canonical_delta))
+
+            # Everything else in this block is unmatched
+            for hp in delta_sorted[:-1]:
+                unmatched.append(hp)
+            for hp in attn_list[1:]:
+                unmatched.append(hp)
+        else:
+            # No pair possible — all are unmatched
+            for hp_list in block_hps.values():
+                unmatched.extend(hp_list)
+
+    return pairs, unmatched
 
 
 def layer_metadata(layer_idx: int, config: Qwen35Config | None = None) -> dict:
     """Return metadata about a layer: type, block number, position in block.
 
     Args:
-        layer_idx: Layer index (0-63).
+        layer_idx: Layer index (0-39).
         config: Optional Qwen35Config. Uses defaults if not provided.
 
     Returns:

@@ -8,6 +8,36 @@ KV-cache), NOT during the prompt prefill phase.  This ensures the model's
 understanding of the prompt is unmodified; the causal intervention acts
 solely on the model's behavioral disposition at each new-token decision
 point.
+
+CAUSALITY CAVEAT — DeltaNet vs Attention layers:
+    Residual steering modifies the residual stream at a single layer and
+    assumes the perturbation propagates approximately linearly to downstream
+    layers.  This assumption has different validity for the two layer types
+    in Qwen 3.5's hybrid architecture:
+
+    - **Attention layers**: The perturbation enters downstream layers through
+      the residual stream and affects attention patterns proportionally.
+      Linear propagation is a reasonable first-order approximation.
+
+    - **DeltaNet layers** (gated linear recurrence): The perturbation enters
+      the recurrent state update and is mixed via a gated linear recurrence
+      (h_t = alpha * h_{t-1} + beta * v_t * k_t^T).  During autoregressive
+      decode, the gate values (alpha, beta) depend on the current hidden
+      state, so the intervention's downstream effect is state-dependent and
+      may be amplified or dampened non-linearly across subsequent tokens.
+      This does NOT invalidate the steering intervention at the target layer
+      itself, but it means that the *propagation* of the perturbation to
+      downstream layers is less predictable than for attention.
+
+    Implications for interpretation:
+    1. High-TAS features identified at DeltaNet layers are *interventionally*
+       associated with the trait (the intervention changes behavior), but the
+       causal pathway is less transparent than for attention layers.
+    2. The ``measure_cross_layer_interaction`` method provides empirical
+       validation of how perturbations actually propagate across layers.
+    3. Results should be framed as "interventional feature identification"
+       rather than "causal feature identification" when the mechanism is
+       through DeltaNet recurrence.
 """
 
 from __future__ import annotations

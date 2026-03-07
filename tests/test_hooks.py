@@ -74,16 +74,16 @@ class TestActivationCache:
                 f"Layer {layer_idx}: expected ({batch_size}, {seq_len}, 32), got {acts.shape}"
             )
 
-    def test_all_64_layers(self) -> None:
-        """All 64 layers can be captured simultaneously."""
-        model = MockModel(num_layers=64, hidden_dim=64)
-        cache = ActivationCache(model, layers=list(range(64)))
+    def test_all_40_layers(self) -> None:
+        """All 40 layers can be captured simultaneously."""
+        model = MockModel(num_layers=40, hidden_dim=64)
+        cache = ActivationCache(model, layers=list(range(40)))
 
         with cache.active():
             model(input_ids=torch.randn(1, 5, 64))
 
-        assert len(cache.cached_layers) == 64
-        for i in range(64):
+        assert len(cache.cached_layers) == 40
+        for i in range(40):
             assert cache.get(i).shape[-1] == 64
 
     def test_deltanet_and_attention_layers(self) -> None:
@@ -177,33 +177,33 @@ class TestQwen35Config:
         # Attention: position 3
         assert config.layer_type(3) == LayerType.ATTENTION
         assert config.layer_type(7) == LayerType.ATTENTION
-        assert config.layer_type(63) == LayerType.ATTENTION
+        assert config.layer_type(39) == LayerType.ATTENTION
 
     def test_layer_counts(self) -> None:
         config = Qwen35Config()
-        assert len(config.deltanet_layers()) == 48
-        assert len(config.attention_layers()) == 16
+        assert len(config.deltanet_layers()) == 30
+        assert len(config.attention_layers()) == 10
 
     def test_block_index(self) -> None:
         config = Qwen35Config()
         assert config.block_index(0) == 0
         assert config.block_index(4) == 1
-        assert config.block_index(63) == 15
+        assert config.block_index(39) == 9
 
     def test_hook_points(self) -> None:
         # 9 hook points: 4 paired DeltaNet+Attention (early/earlymid/mid/late)
         # + 1 control DeltaNet (mid_pos1)
         assert len(HOOK_POINTS) == 9
         layers = [hp.layer for hp in HOOK_POINTS]
-        assert 10 in layers   # sae_delta_early
-        assert 11 in layers   # sae_attn_early
-        assert 22 in layers   # sae_delta_earlymid
-        assert 23 in layers   # sae_attn_earlymid
-        assert 33 in layers   # sae_delta_mid_pos1 (control)
-        assert 34 in layers   # sae_delta_mid
-        assert 35 in layers   # sae_attn_mid
-        assert 54 in layers   # sae_delta_late
-        assert 55 in layers   # sae_attn_late
+        assert 6 in layers    # sae_delta_early
+        assert 7 in layers    # sae_attn_early
+        assert 14 in layers   # sae_delta_earlymid
+        assert 15 in layers   # sae_attn_earlymid
+        assert 21 in layers   # sae_delta_mid_pos1 (control)
+        assert 22 in layers   # sae_delta_mid
+        assert 23 in layers   # sae_attn_mid
+        assert 34 in layers   # sae_delta_late
+        assert 35 in layers   # sae_attn_late
 
         # Verify layer types match architecture
         sae_by_id = {hp.sae_id: hp for hp in HOOK_POINTS}

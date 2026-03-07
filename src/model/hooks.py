@@ -66,8 +66,10 @@ class ActivationCache:
                 hidden_states = output[0]
             else:
                 hidden_states = output
-            # Detach to prevent gradient tracking, store on same device
-            self._cache[layer_idx] = hidden_states.detach()
+            # Detach and clone: detach prevents gradient tracking, clone
+            # ensures the cached tensor is not corrupted if a downstream layer
+            # modifies the residual stream tensor in-place (e.g., += residual).
+            self._cache[layer_idx] = hidden_states.detach().clone()
 
         return hook_fn
 

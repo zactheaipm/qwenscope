@@ -5,6 +5,15 @@ IMPORTANT: Hooks capture the residual stream after the full layer (attention/Del
 have different features than layers containing attention" rather than "DeltaNet
 represents differently than attention," since we cannot isolate the sublayer
 contribution from the FFN and skip connection.
+
+CAUSALITY NOTE: Steering interventions at DeltaNet layers modify the residual stream,
+but the perturbation propagates through the gated linear recurrence differently than
+through attention.  DeltaNet's state update (h_t = alpha * h_{t-1} + beta * v_t * k_t^T)
+means the intervention's downstream effect is state-dependent and may be non-linearly
+amplified or dampened.  When comparing steering efficacy between DeltaNet and attention
+SAEs, differences may reflect propagation dynamics rather than feature quality.  Use
+``measure_cross_layer_interaction`` and ``measure_routing_drift`` to disentangle these
+effects.
 """
 
 from __future__ import annotations
@@ -19,7 +28,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from src.data.contrastive import BehavioralTrait
 from src.features.architecture_analysis import ArchitectureComparisonResult
 from src.features.scoring import rank_features
-from src.model.config import HOOK_POINTS, LayerType
+from src.model.config import HOOK_POINTS, LayerType, SAE_DEPTH_BAND
 from src.sae.model import TopKSAE
 
 logger = logging.getLogger(__name__)
@@ -67,7 +76,7 @@ def compare_feature_geometry(
 
     For each trait, extracts top-k features from DeltaNet and attention SAEs,
     then computes cosine similarity between their decoder weight vectors in the
-    shared 5120-dim residual stream space.
+    shared 2048-dim residual stream space.
 
     If same-trait features in DeltaNet and attention SAEs point in similar
     directions, this suggests shared representation across layer types.
@@ -216,30 +225,29 @@ def analyze_block_structure(
         attn_mean = float(np.mean(attn_strengths)) if attn_strengths else 0.0
         ratio = delta_mean / max(attn_mean, 1e-8)
 
-        # Depth dominance
-        depth_groups = {"early": 0.0, "mid": 0.0, "late": 0.0}
+        # Depth dominance — use config-based depth band lookup
+        depth_groups = {"early": 0.0, "earlymid": 0.0, "mid": 0.0, "late": 0.0}
         for sae_id, strength in sae_strengths.items():
-            if "early" in sae_id:
-                depth_groups["early"] += strength
-            elif "mid" in sae_id:
-                depth_groups["mid"] += strength
-            elif "late" in sae_id:
-                depth_groups["late"] += strength
+            band = SAE_DEPTH_BAND.get(sae_id)
+            if band and band in depth_groups:
+                depth_groups[band] += strength
 
         total = sum(depth_groups.values()) or 1.0
 
         results[trait] = {
             "deltanet_before_attention_ratio": ratio,
             "early_block_dominance": depth_groups["early"] / total,
+            "earlymid_block_dominance": depth_groups["earlymid"] / total,
             "mid_block_dominance": depth_groups["mid"] / total,
             "late_block_dominance": depth_groups["late"] / total,
         }
 
         logger.info(
-            "Block structure for %s: delta/attn ratio=%.3f, depth dist=[%.2f, %.2f, %.2f]",
+            "Block structure for %s: delta/attn ratio=%.3f, depth dist=[%.2f, %.2f, %.2f, %.2f]",
             trait.value,
             ratio,
             depth_groups["early"] / total,
+            depth_groups["earlymid"] / total,
             depth_groups["mid"] / total,
             depth_groups["late"] / total,
         )

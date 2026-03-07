@@ -30,6 +30,7 @@ import argparse
 import json
 import logging
 import os
+import queue as queue_module
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -287,7 +288,17 @@ def run_producer(
                 acts_masked = acts[mask.expand_as(acts)].view(-1, acts.shape[-1])  # (N, D)
                 acts_cpu = acts_masked.cpu()
                 for sae_id in layer_to_sae_ids[layer]:
-                    queues[sae_id].put(acts_cpu)
+                    # Use timeout to avoid deadlock if a worker dies and its
+                    # queue fills up. Check error_event between retries.
+                    while True:
+                        if error_event.is_set():
+                            logger.error("Worker error detected, aborting producer.")
+                            return
+                        try:
+                            queues[sae_id].put(acts_cpu, timeout=10.0)
+                            break
+                        except queue_module.Full:
+                            continue
 
             cache.clear()
             tokens_processed += int(attention_mask.sum().item())

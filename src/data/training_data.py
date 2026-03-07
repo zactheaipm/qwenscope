@@ -1279,7 +1279,7 @@ class _SafeFormatDict(dict):
 
     def __missing__(self, key: str) -> str:
         logger.debug("Template variation missing key: %s", key)
-        return ""
+        return "{" + key + "}"
 
 
 def _render_template_variation(

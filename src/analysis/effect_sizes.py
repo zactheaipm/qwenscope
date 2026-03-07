@@ -149,7 +149,12 @@ def bootstrap_ci(
     if len(arr) == 0:
         return {"point_estimate": 0.0, "ci_lower": 0.0, "ci_upper": 0.0}
 
-    stat_fn = np.mean if statistic == "mean" else np.median
+    if statistic == "mean":
+        stat_fn = np.mean
+    elif statistic == "median":
+        stat_fn = np.median
+    else:
+        raise ValueError(f"Unsupported statistic: {statistic!r}. Use 'mean' or 'median'.")
     point = float(stat_fn(arr))
 
     bootstrap_stats = np.empty(n_bootstrap)
@@ -194,6 +199,9 @@ def bootstrap_ci_difference(
     g1 = np.asarray(group1, dtype=np.float64)
     g2 = np.asarray(group2, dtype=np.float64)
     rng = np.random.RandomState(seed)
+
+    if len(g1) == 0 or len(g2) == 0:
+        return {"point_estimate": 0.0, "ci_lower": 0.0, "ci_upper": 0.0}
 
     point = float(g1.mean() - g2.mean())
 

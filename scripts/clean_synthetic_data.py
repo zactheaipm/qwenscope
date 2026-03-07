@@ -57,36 +57,46 @@ def _fix_tool_call(tc: dict) -> dict:
 
 
 def _merge_consecutive_assistants(messages: list[dict]) -> list[dict]:
-    """Merge consecutive assistant messages into one.
+    """Merge runs of consecutive assistant messages into one.
 
-    Pattern: assistant(text only) → assistant(tool_calls only)
-    Result: single assistant with both content and tool_calls.
+    Handles arbitrary-length runs (not just pairs). For each run of N
+    consecutive assistant messages, produces a single assistant message
+    whose content is the first non-None content found and whose
+    tool_calls is the concatenation of all tool_calls lists in order.
     """
-    merged = []
+    merged: list[dict] = []
     i = 0
     while i < len(messages):
         msg = messages[i]
-        if (
-            msg.get("role") == "assistant"
-            and i + 1 < len(messages)
-            and messages[i + 1].get("role") == "assistant"
-        ):
-            next_msg = messages[i + 1]
-            # Merge: take content from first, tool_calls from second (or vice versa)
-            content = msg.get("content") or next_msg.get("content")
-            tool_calls = msg.get("tool_calls") or next_msg.get("tool_calls")
-            merged_msg = {"role": "assistant"}
-            if content:
-                merged_msg["content"] = content
-            else:
-                merged_msg["content"] = None
-            if tool_calls:
-                merged_msg["tool_calls"] = tool_calls
-            merged.append(merged_msg)
-            i += 2
-        else:
+        if msg.get("role") != "assistant":
             merged.append(msg)
             i += 1
+            continue
+
+        # Collect the full run of consecutive assistant messages
+        run = [msg]
+        j = i + 1
+        while j < len(messages) and messages[j].get("role") == "assistant":
+            run.append(messages[j])
+            j += 1
+
+        if len(run) == 1:
+            merged.append(msg)
+        else:
+            # Merge: first non-None content, concatenated tool_calls
+            content = None
+            all_tool_calls: list[dict] = []
+            for m in run:
+                if content is None and m.get("content"):
+                    content = m["content"]
+                if m.get("tool_calls"):
+                    all_tool_calls.extend(m["tool_calls"])
+            merged_msg: dict = {"role": "assistant", "content": content}
+            if all_tool_calls:
+                merged_msg["tool_calls"] = all_tool_calls
+            merged.append(merged_msg)
+
+        i = j
     return merged
 
 

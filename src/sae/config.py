@@ -85,7 +85,7 @@ class SAETrainingConfig(BaseModel):
             training_tokens=_get("training_tokens", 200_000_000),
             checkpoint_every_tokens=_get("checkpoint_every_tokens", 50_000_000),
             seed=_get("seed", 42),
-            buffer_capacity=_get("buffer_capacity", 500_000),
+            buffer_capacity=_get("buffer_capacity", 2_000_000),
             resample_every_n_steps=_get("resample_every_n_steps", 5_000),
             max_seq_length=_get("max_seq_length", 2048),
             layer=hook_point["layer"],

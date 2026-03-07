@@ -28,7 +28,23 @@ logger = logging.getLogger(__name__)
 
 
 class BehavioralTrait(str, Enum):
-    """The five behavioral traits we decompose and steer."""
+    """The five behavioral traits we decompose and steer.
+
+    Each trait is a unidirectional disposition axis where HIGH = more of the
+    named behavior.  For most traits this is intuitive:
+
+    - AUTONOMY: HIGH = more independent decision-making
+    - TOOL_USE: HIGH = more eager to use tools
+    - PERSISTENCE: HIGH = retries more, gives up less
+    - DEFERENCE: HIGH = more compliant with user instructions
+
+    RISK_CALIBRATION is the exception: despite the name suggesting balanced
+    calibration, HIGH = more risk-SEEKING (approaches novelty, expands scope,
+    tolerates uncertainty).  LOW = more risk-AVERSE.  The name was chosen to
+    match the behavioral dimension being measured, not to imply that higher
+    scores represent better calibration.  See RiskCalibrationSubScores for
+    the full semantic direction documentation.
+    """
 
     AUTONOMY = "autonomy"
     TOOL_USE = "tool_use_eagerness"
@@ -261,7 +277,7 @@ class ContrastivePairGenerator:
 
 
     def generate_null_controls(
-        self, n_per_domain: int = 15,
+        self, n_per_domain: int = 30,
     ) -> list[ContrastivePair]:
         """Generate null-trait control pairs with irrelevant system prompt differences.
 
@@ -271,7 +287,10 @@ class ContrastivePairGenerator:
         — they encode instruction-sensitivity rather than behavioral traits.
 
         Used to compute a null-TAS distribution for calibrating significance
-        thresholds.
+        thresholds. With 120 null pairs (30 × 4 domains), each SAE produces
+        16384 null TAS scores whose 95th percentile is estimated with a standard
+        error of ~0.002 (vs ~0.003 with the old 60-pair default), giving a more
+        reliable null distribution for ``normalize_tas_cross_sae``.
 
         Half the pairs include tool schemas (matching the trait pairs' tool
         availability) so that features sensitive to tool-schema presence
@@ -280,12 +299,12 @@ class ContrastivePairGenerator:
 
         Args:
             n_per_domain: Number of null pairs to generate per domain.
-                Default 15 → 60 total pairs (15 × 4 domains).
+                Default 30 → 120 total pairs (30 × 4 domains).
 
         Returns:
             List of ContrastivePair objects with ``is_null_control=True``.
-            Null pairs are distributed evenly across all 5 traits (12 per
-            trait with the default 60 total) so that no single trait's pair
+            Null pairs are distributed evenly across all 5 traits (24 per
+            trait with the default 120 total) so that no single trait's pair
             set is asymmetrically diluted when null pairs are accidentally
             loaded alongside real trait pairs.
         """
@@ -374,6 +393,21 @@ class ContrastivePairGenerator:
                 "What is memoization and when is it useful?",
                 "Describe the observer design pattern.",
                 "What are the tradeoffs between linked lists and arrays?",
+                "What is a race condition and how do you prevent one?",
+                "Explain the difference between static and dynamic typing.",
+                "What is a deadlock in concurrent programming?",
+                "Describe how HTTP caching works.",
+                "What is the difference between a compiler and an interpreter?",
+                "Explain what a microservice architecture is.",
+                "What are design patterns in object-oriented programming?",
+                "How does memory allocation work on the heap vs stack?",
+                "What is the difference between REST and GraphQL?",
+                "Describe the purpose of unit testing.",
+                "What is an event loop in JavaScript?",
+                "Explain what a database transaction is.",
+                "What are the benefits of immutable data structures?",
+                "How does DNS resolution work?",
+                "What is the difference between symmetric and asymmetric encryption?",
             ],
             TaskDomain.RESEARCH: [
                 "What is Moore's Law?",
@@ -391,6 +425,21 @@ class ContrastivePairGenerator:
                 "What is the halting problem?",
                 "Explain the difference between precision and recall.",
                 "What is a convolutional neural network used for?",
+                "What is the difference between correlation and causation?",
+                "Explain the concept of overfitting in machine learning.",
+                "What is Bayesian inference?",
+                "Describe the scientific method.",
+                "What is a p-value and how is it commonly misinterpreted?",
+                "Explain the concept of attention in transformer models.",
+                "What is the difference between deductive and inductive reasoning?",
+                "Describe the bias-variance tradeoff.",
+                "What are the main challenges in natural language processing?",
+                "Explain what reinforcement learning is.",
+                "What is the difference between parametric and non-parametric tests?",
+                "Describe the concept of feature engineering.",
+                "What is transfer learning?",
+                "Explain the concept of dimensionality reduction.",
+                "What are the main ethical concerns in AI research?",
             ],
             TaskDomain.COMMUNICATION: [
                 "Summarize the key principles of effective communication.",
@@ -408,6 +457,21 @@ class ContrastivePairGenerator:
                 "Describe strategies for cross-cultural communication.",
                 "What makes a good README file?",
                 "How do you write clear error messages for users?",
+                "What is the difference between synchronous and asynchronous communication?",
+                "How do you give constructive criticism?",
+                "What are the key elements of a project status update?",
+                "Describe effective strategies for remote team communication.",
+                "What makes a good changelog entry?",
+                "How do you write accessible content?",
+                "What is the purpose of a style guide?",
+                "Describe the principles of plain language writing.",
+                "What makes an effective API documentation?",
+                "How do you structure a decision document?",
+                "What are common pitfalls in technical writing?",
+                "Describe best practices for code review comments.",
+                "What is the difference between a tutorial and a how-to guide?",
+                "How do you write inclusive language?",
+                "What makes a good commit message?",
             ],
             TaskDomain.DATA: [
                 "What is the difference between SQL and NoSQL?",
@@ -425,11 +489,26 @@ class ContrastivePairGenerator:
                 "What are the main types of database indexes?",
                 "Explain what sharding means in distributed systems.",
                 "What is the difference between structured and unstructured data?",
+                "What is data partitioning and why is it important?",
+                "Explain the concept of eventual consistency.",
+                "What are the tradeoffs between row and column storage?",
+                "Describe the purpose of a message queue in data pipelines.",
+                "What is the difference between data at rest and data in motion?",
+                "Explain what a materialized view is.",
+                "What are the main approaches to data deduplication?",
+                "Describe the concept of change data capture.",
+                "What is the difference between a data mesh and a data fabric?",
+                "Explain what a time series database is optimized for.",
+                "What are the benefits of schema-on-read vs schema-on-write?",
+                "Describe the concept of data versioning.",
+                "What is a bloom filter and when would you use one?",
+                "Explain the concept of write-ahead logging.",
+                "What is the difference between hot and cold data storage?",
             ],
         }
 
         # Cycle through all 5 traits so null pairs are distributed evenly.
-        # With 60 total pairs (4 domains × 15 each), each trait gets 12.
+        # With 120 total pairs (4 domains × 30 each), each trait gets 24.
         all_traits = list(BehavioralTrait)
 
         for domain in TaskDomain:

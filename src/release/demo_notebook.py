@@ -14,9 +14,9 @@ NOTEBOOK_CELLS = [
         "source": [
             "# Qwen 3.5 Scope — SAE Demo\n",
             "\n",
-            "This notebook demonstrates how to use the Sparse Autoencoders trained on Qwen 3.5-27B.\n",
+            "This notebook demonstrates how to use the Sparse Autoencoders trained on Qwen 3.5-35B-A3B.\n",
             "\n",
-            "[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/)\n",
+            "[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/eigen-labs/qwen35-scope/blob/main/demo.ipynb)\n",
         ],
     },
     {
@@ -65,6 +65,7 @@ NOTEBOOK_CELLS = [
             "    def encode(self, x):\n",
             "        x_centered = x - self.pre_bias\n",
             "        latents = x_centered @ self.encoder_weight.T + self.encoder_bias\n",
+            "        latents = latents.clamp(min=0)  # ReLU before TopK\n",
             "        topk_vals, topk_idx = torch.topk(latents, self.k, dim=-1)\n",
             "        sparse = torch.zeros_like(latents)\n",
             "        sparse.scatter_(-1, topk_idx, topk_vals)\n",
@@ -81,7 +82,7 @@ NOTEBOOK_CELLS = [
         "cell_type": "code",
         "source": [
             "# Test with random activations\n",
-            "x = torch.randn(1, 10, 5120)  # (batch, seq_len, hidden_dim)\n",
+            "x = torch.randn(1, 10, 2048)  # (batch, seq_len, hidden_dim)\n",
             "features = sae.encode(x)\n",
             "reconstruction = sae.decode(features)\n",
             "\n",

@@ -1,11 +1,11 @@
 [project]
 name = "qwenscope"
 version = "0.1.0"
-description = "SAE-based behavioral decomposition for Qwen 3.5-27B hybrid architecture"
+description = "SAE-based behavioral decomposition for Qwen 3.5-35B-A3B hybrid architecture"
 requires-python = ">=3.11"
 dependencies = [
     "torch>=2.6",
-    "transformers>=4.48",
+    "transformers>=5.0",
     "safetensors>=0.4",
     "einops>=0.7",
     "pydantic>=2.0",

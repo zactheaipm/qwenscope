@@ -1,1 +1,1 @@
-"""Qwen 3.5-27B model integration — loading, hooks, and architecture metadata."""
+"""Qwen 3.5-35B-A3B model integration — loading, hooks, and architecture metadata."""

@@ -853,10 +853,10 @@ TOOL_USE_TEMPLATES_MAP: dict[TaskDomain, list[dict[str, Any]]] = {
             "expected_high": "Agent builds a computational model, gathers real parameters via search, and runs simulations",
             "expected_low": "Agent provides a rough analytical estimate with stated assumptions",
             "variations": [
-                {"quantity": "compute cost", "scenario": "training 7 SAEs on Qwen 3.5-27B at 200M tokens each"},
+                {"quantity": "compute cost", "scenario": "training 7 SAEs on Qwen 3.5-35B-A3B at 200M tokens each"},
                 {"quantity": "memory requirements", "scenario": "caching activations for 400 contrastive pairs at 6 hook points"},
                 {"quantity": "statistical power", "scenario": "detecting a 0.1 TAS difference with 40 independent samples per trait"},
-                {"quantity": "time to convergence", "scenario": "TopK SAE with 40960 features at lr=5e-5 on 200M tokens"},
+                {"quantity": "time to convergence", "scenario": "TopK SAE with 16384 features at lr=5e-5 on 200M tokens"},
             ],
         },
         {

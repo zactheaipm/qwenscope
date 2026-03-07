@@ -91,6 +91,12 @@ class FeatureExtractor:
         self.layer_map = layer_map
         self.device = device
         self.pooling_strategy: PoolingStrategy = pooling_strategy
+        # Cache each SAE's dtype to avoid repeated introspection in the hot loop.
+        # Model outputs are typically BF16 but SAE weights may be FP32.
+        self._sae_dtypes: dict[str, torch.dtype] = {
+            sae_id: next(sae.parameters()).dtype
+            for sae_id, sae in sae_dict.items()
+        }
 
     def _tokenize_messages(
         self,
@@ -114,8 +120,9 @@ class FeatureExtractor:
                 add_generation_prompt=True,
                 enable_thinking=False,
             )
-        except Exception:
+        except Exception as e:
             # Fallback without tools if template doesn't support them
+            logger.debug("Chat template with tools failed, falling back: %s", e)
             text = self.tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
@@ -228,9 +235,11 @@ class FeatureExtractor:
             for sae_id, sae in self.sae_dict.items():
                 layer = self.layer_map[sae_id]
 
-                # Encode through SAE
-                features_high = sae.encode(high_acts[layer])  # (1, seq_len, dict_size)
-                features_low = sae.encode(low_acts[layer])    # (1, seq_len, dict_size)
+                # Cast to SAE dtype before encoding — model outputs are typically
+                # BF16 but SAE weights may be FP32, causing a RuntimeError.
+                sae_dtype = self._sae_dtypes[sae_id]
+                features_high = sae.encode(high_acts[layer].to(dtype=sae_dtype))  # (1, seq_len, dict_size)
+                features_low = sae.encode(low_acts[layer].to(dtype=sae_dtype))    # (1, seq_len, dict_size)
 
                 # Pool across sequence positions using the configured strategy
                 features_high_pooled = self._pool_features(

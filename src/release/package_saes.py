@@ -66,7 +66,7 @@ def package_for_huggingface(
 
     # Build per-hook-point config by reading each SAE's actual checkpoint config.
     # This avoids hardcoding dict_size/topk which differ across hook points
-    # (e.g., early SAEs use dict_size=20480, topk=128; earlymid uses topk=96).
+    # (e.g., early SAEs use dict_size=8192, topk=128; earlymid uses topk=96).
     hook_point_configs = {}
     for hp in HOOK_POINTS:
         hp_config: dict[str, Any] = {
@@ -98,9 +98,9 @@ def package_for_huggingface(
 
     config = {
         "model_type": "topk_sae",
-        "base_model": "Qwen/Qwen3.5-27B",
-        "architecture": "Qwen 3.5-27B hybrid (DeltaNet + Attention)",
-        "hidden_dim": 5120,
+        "base_model": "Qwen/Qwen3.5-35B-A3B",
+        "architecture": "Qwen 3.5-35B-A3B hybrid (DeltaNet + Attention, MoE)",
+        "hidden_dim": 2048,
         "training_tokens": 200_000_000,
         "training_methodology": "FAST (sequential instruction-following + tool-use)",
         "hook_points": hook_point_configs,

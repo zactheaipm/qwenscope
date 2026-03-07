@@ -208,6 +208,7 @@ class SAETrainer:
         self._last_checkpoint_tokens = 0
         self._resampled_count = 0
         self._resume_skip_tokens = 0   # tokens to skip on resume (fast-forward)
+        self._pre_bias_initialized = False  # set True after first buffer fill
 
         # Optional WandB
         self._wandb_run = None
@@ -315,6 +316,8 @@ class SAETrainer:
 
         # On the next train() call, skip this many stream tokens.
         self._resume_skip_tokens = self._stream_tokens_seen
+        # Checkpoint pre_bias is already trained — don't reinitialize.
+        self._pre_bias_initialized = True
 
         logger.info(
             "Resumed from checkpoint: step=%d, stream_tokens=%d, "
@@ -386,6 +389,27 @@ class SAETrainer:
             if not self._buffer.is_ready:
                 continue
 
+            # Initialize pre_bias to the running mean of the activation data.
+            # This is standard practice (Anthropic/OpenAI SAE papers): centering
+            # inputs around their mean before encoding helps the SAE learn
+            # directions relative to the typical activation, rather than wasting
+            # capacity re-discovering the mean. Only done once, on the first
+            # buffer fill (not on resume — the checkpoint already has a trained
+            # pre_bias).
+            if not self._pre_bias_initialized:
+                with torch.no_grad():
+                    sample = self._buffer.sample(
+                        min(len(self._buffer), 50_000), device=device
+                    ).to(dtype=sae_dtype)
+                    data_mean = sample.mean(dim=0)
+                    self.sae.pre_bias.data.copy_(data_mean)
+                    logger.info(
+                        "Initialized pre_bias from data mean (norm=%.3f, %d samples)",
+                        float(data_mean.norm().item()),
+                        sample.shape[0],
+                    )
+                self._pre_bias_initialized = True
+
             # Train for as many mini-batches as there are new activations.
             # Each mini-batch is sampled fresh from the full buffer, ensuring
             # every gradient step sees a properly randomized mix.
@@ -456,11 +480,11 @@ class SAETrainer:
                         mini_batch, reconstruction
                     )
 
-                    # Track activation RMS norm per layer type. DeltaNet and
+                    # Track activation L2 norm per layer type. DeltaNet and
                     # attention layers may have meaningfully different activation
                     # scales; large divergence from historical mean can signal
                     # that the learning rate or SAE scale is miscalibrated.
-                    act_rms_norm = float(
+                    act_l2_norm = float(
                         mini_batch.norm(dim=-1).mean().item()
                     )
 
@@ -475,7 +499,7 @@ class SAETrainer:
                         "step": self._step,
                         "resampled_total": self._resampled_count,
                         "buffer_size": len(self._buffer),
-                        "activations/rms_norm": act_rms_norm,
+                        "activations/l2_norm": act_l2_norm,
                     }
 
                     if self._wandb_run is not None:
@@ -496,7 +520,7 @@ class SAETrainer:
                             self._stream_tokens_seen,
                             self._tokens_seen,
                             len(self._buffer),
-                            metrics["activations/rms_norm"],
+                            metrics["activations/l2_norm"],
                         )
 
             # Checkpoint keyed by stream tokens (actual activations received from
@@ -606,8 +630,10 @@ class SAETrainer:
         dead_latents = latents[:, dead_indices]              # (batch, n_dead)
 
         k_aux = min(self.sae.k, n_dead)
+        # ReLU before TopK (consistent with main SAE encode): ensures dead
+        # features only get gradient signal through genuinely positive activations.
+        dead_latents = dead_latents.clamp(min=0)
         topk_vals, topk_cols = dead_latents.topk(k_aux, dim=-1)  # (batch, k_aux)
-        topk_vals = topk_vals.clamp(min=0)
 
         # Scatter back into full dictionary space
         dead_features = torch.zeros_like(latents)            # (batch, dict_size)

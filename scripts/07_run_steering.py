@@ -95,7 +95,7 @@ def main() -> None:
     )
 
     all_results = {}
-    cost_tracker_data = {"api_calls": 0, "start_time": time.time()}
+    cost_tracker_data = {"start_time": time.time()}
 
     # === Experiment 1: Standard steering ===
     if args.experiment in ("1", "all"):

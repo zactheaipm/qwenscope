@@ -356,8 +356,10 @@ def compute_reconstruction_metrics(
                     "eval/freq_gini": metrics["freq_gini"],
                     "eval/freq_top1_pct": metrics["freq_top1_pct"],
                 })
-    except (ImportError, Exception):
+    except ImportError:
         pass
+    except Exception as e:
+        logger.debug("WandB logging skipped: %s", e)
 
     return metrics
 

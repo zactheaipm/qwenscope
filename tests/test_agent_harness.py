@@ -150,14 +150,14 @@ class TestMockResponseLookup:
 
         assert response["results"][0]["title"] == "Second"
 
-    def test_excess_calls_reuse_last(
+    def test_excess_calls_return_failure_variants(
         self, harness: AgentHarness, scenario: EvaluationScenario
     ) -> None:
-        """Calls beyond pre-cached count reuse the last response."""
+        """Calls beyond pre-cached count return varied failure responses."""
         call = ToolCall(name="web_search", arguments={"query": "test"})
         response = harness._get_mock_response(scenario, call, call_index=5)
 
-        assert response["results"][0]["title"] == "Second"
+        assert "error" in response
 
     def test_unknown_tool_returns_error(
         self, harness: AgentHarness, scenario: EvaluationScenario

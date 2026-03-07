@@ -21,7 +21,8 @@ from pydantic import BaseModel
 from scipy import stats
 
 from src.data.contrastive import BehavioralTrait
-from src.model.config import HOOK_POINTS, LayerType, Qwen35Config
+from src.features.scoring import normalize_tas_cross_sae
+from src.model.config import DEPTH_BAND_SAES, HOOK_POINTS, LayerType, Qwen35Config, SAE_DEPTH_BAND
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ def compare_layer_types(
     all_tas: dict[BehavioralTrait, dict[str, torch.Tensor]],
     config: Qwen35Config | None = None,
     significance_threshold: float = 2.0,
+    null_tas: dict[str, torch.Tensor] | None = None,
 ) -> ArchitectureComparisonResult:
     """Compare TAS distributions between DeltaNet and attention layer SAEs.
 
@@ -66,10 +68,22 @@ def compare_layer_types(
     3. Compare: max TAS, mean of top-20 TAS, number of significant features
     4. Statistical test: Mann-Whitney U on full TAS distributions
 
+    When ``null_tas`` is provided, TAS scores are z-score normalized against
+    the null distribution for each SAE before aggregation. This is critical
+    for fair cross-SAE comparison because SAEs with different dict_size and
+    k values have fundamentally different TAS null distributions — a raw TAS
+    of 5.0 from a 16K-feature SAE means something different from 5.0 from
+    an 8K-feature SAE.
+
     Args:
         all_tas: Nested dict: trait → sae_id → TAS tensor.
         config: Optional Qwen35Config.
         significance_threshold: |TAS| above this counts as significant.
+            When null_tas is provided, this threshold is in units of null
+            standard deviations rather than raw TAS.
+        null_tas: Optional dict mapping sae_id → null TAS tensor (from null
+            control pairs). When provided, TAS is normalized per-SAE before
+            cross-SAE comparison.
 
     Returns:
         ArchitectureComparisonResult with per-trait comparisons.
@@ -89,6 +103,10 @@ def compare_layer_types(
         attention_tas_all = []
 
         for sae_id, tas in sae_tas.items():
+            # Normalize if null TAS is available for this SAE
+            if null_tas is not None and sae_id in null_tas:
+                tas = normalize_tas_cross_sae(tas, null_tas[sae_id])
+
             abs_tas = tas.abs().cpu().numpy()
             if sae_id in deltanet_sae_ids:
                 deltanet_tas_all.append(abs_tas)
@@ -266,6 +284,7 @@ def compare_within_block_positions(
 
 def trait_localization_score(
     all_tas: dict[BehavioralTrait, dict[str, torch.Tensor]],
+    null_tas: dict[str, torch.Tensor] | None = None,
 ) -> dict[BehavioralTrait, dict[str, float]]:
     """For each trait, compute how localized it is to specific layer types/depths.
 
@@ -275,8 +294,13 @@ def trait_localization_score(
     Uses the max-deviation from uniform distribution as the localization
     metric, normalized to [0, 1].
 
+    When ``null_tas`` is provided, TAS scores are z-score normalized per-SAE
+    before computing localization, ensuring fair comparison across SAEs with
+    different dict_size/k.
+
     Args:
         all_tas: Nested dict: trait → sae_id → TAS tensor.
+        null_tas: Optional dict mapping sae_id → null TAS tensor.
 
     Returns:
         Dict mapping trait to {
@@ -290,37 +314,19 @@ def trait_localization_score(
     deltanet_sae_ids = {hp.sae_id for hp in HOOK_POINTS if hp.layer_type == LayerType.DELTANET}
     attention_sae_ids = {hp.sae_id for hp in HOOK_POINTS if hp.layer_type == LayerType.ATTENTION}
 
-    # Group by depth — derive from HOOK_POINTS to stay in sync when new
-    # hook points are added (e.g., earlymid was missing before this fix).
-    def _depth_group(sae_id: str) -> str | None:
-        """Classify SAE ID into a depth group by matching block-based naming."""
-        # Order matters: check "earlymid" before "early" and "mid" to avoid
-        # substring ambiguity (e.g., "sae_delta_earlymid" contains both "early" and "mid").
-        if "earlymid" in sae_id:
-            return "earlymid"
-        if "early" in sae_id:
-            return "early"
-        if "late" in sae_id:
-            return "late"
-        if "mid" in sae_id:
-            return "mid"
-        return None
-
-    depth_groups: dict[str, set[str]] = {"early": set(), "earlymid": set(), "mid": set(), "late": set()}
-    for hp in HOOK_POINTS:
-        group = _depth_group(hp.sae_id)
-        if group is not None:
-            depth_groups[group].add(hp.sae_id)
-
-    early_sae_ids = depth_groups["early"]
-    earlymid_sae_ids = depth_groups["earlymid"]
-    mid_sae_ids = depth_groups["mid"]
-    late_sae_ids = depth_groups["late"]
+    # Use config-based depth band lookup instead of fragile string matching.
+    early_sae_ids = DEPTH_BAND_SAES.get("early", set())
+    earlymid_sae_ids = DEPTH_BAND_SAES.get("earlymid", set())
+    mid_sae_ids = DEPTH_BAND_SAES.get("mid", set())
+    late_sae_ids = DEPTH_BAND_SAES.get("late", set())
 
     for trait, sae_tas in all_tas.items():
         # Count significant features per SAE
         sae_counts: dict[str, float] = {}
         for sae_id, tas in sae_tas.items():
+            # Normalize if null TAS is available for this SAE
+            if null_tas is not None and sae_id in null_tas:
+                tas = normalize_tas_cross_sae(tas, null_tas[sae_id])
             top20_mean = float(tas.abs().topk(min(20, tas.shape[0])).values.mean().item())
             sae_counts[sae_id] = top20_mean
 

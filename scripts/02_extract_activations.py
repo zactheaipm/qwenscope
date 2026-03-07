@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract activations for SAE evaluation")
-    parser.add_argument("--layer", type=int, default=32, help="Layer to extract from")
+    parser.add_argument("--layer", type=int, default=23, help="Layer to extract from (default: 23 = sae_attn_mid)")
     parser.add_argument("--n-tokens", type=int, default=1_000_000, help="Tokens to extract")
     parser.add_argument("--device", default=os.environ.get("DEVICE", "cuda"))
     parser.add_argument("--output-dir", default=os.environ.get("ACTIVATIONS_DIR", "data/activations"))

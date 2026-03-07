@@ -141,26 +141,26 @@ tags:
   - behavioral-steering
 language:
   - en
-base_model: Qwen/Qwen3.5-27B
+base_model: Qwen/Qwen3.5-35B-A3B
 ---
 
-# Qwen 3.5 Scope — Sparse Autoencoders for Qwen 3.5-27B
+# Qwen 3.5 Scope — Sparse Autoencoders for Qwen 3.5-35B-A3B
 
-The first set of Sparse Autoencoders (SAEs) trained on **Qwen 3.5-27B**, a hybrid
-Gated DeltaNet + full attention architecture.
+The first set of Sparse Autoencoders (SAEs) trained on **Qwen 3.5-35B-A3B**, a hybrid
+Gated DeltaNet + full attention MoE architecture.
 
 ## Model Description
 
-This release contains {n_saes} TopK SAEs trained at different positions in the Qwen 3.5-27B
+This release contains {n_saes} TopK SAEs trained at different positions in the Qwen 3.5-35B-A3B
 residual stream, covering both DeltaNet (linear attention) and full attention layers
 at early, early-mid, mid, and late depths. Includes a position-in-block control SAE for
 isolating layer-type effects from positional confounds.
 
 ### Architecture
 
-- **Base model:** Qwen 3.5-27B (64 layers, hybrid DeltaNet + Attention)
+- **Base model:** Qwen 3.5-35B-A3B (40 layers, hybrid DeltaNet + Attention, MoE)
 - **SAE type:** TopK (k varies by hook point: 64, 96, or 128)
-- **Dictionary size:** 20,480 or 40,960 depending on hook point
+- **Dictionary size:** 8,192 or 16,384 depending on hook point
 - **Training methodology:** FAST (sequential instruction-following + tool-use data)
 - **Training tokens:** 200M per SAE
 

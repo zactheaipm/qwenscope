@@ -95,9 +95,9 @@ def main() -> None:
             f"Layer {layer_idx}: expected hidden_dim={config.hidden_dim}, got {acts.shape[-1]}"
         )
         layer_type = config.layer_type(layer_idx)
-        rms_norm = float(acts.norm(dim=-1).mean().item())
-        act_norms[layer_idx] = rms_norm
-        logger.debug("Layer %d (%s): shape=%s, rms_norm=%.3f", layer_idx, layer_type.value, acts.shape, rms_norm)
+        act_l2_norm = float(acts.norm(dim=-1).mean().item())
+        act_norms[layer_idx] = act_l2_norm
+        logger.debug("Layer %d (%s): shape=%s, l2_norm=%.3f", layer_idx, layer_type.value, acts.shape, act_l2_norm)
 
     logger.info("All %d layers verified: correct shapes (batch, seq_len, %d)", num_layers, config.hidden_dim)
 
@@ -105,7 +105,7 @@ def main() -> None:
     logger.info("=== Activation Norms at Hook Points ===")
     for hp in HOOK_POINTS:
         norm = act_norms.get(hp.layer, 0.0)
-        logger.info("  %s (layer %d, %s): rms_norm=%.3f", hp.sae_id, hp.layer, hp.layer_type.value, norm)
+        logger.info("  %s (layer %d, %s): l2_norm=%.3f", hp.sae_id, hp.layer, hp.layer_type.value, norm)
 
     # Print architecture summary
     logger.info("=== Hook Points ===")

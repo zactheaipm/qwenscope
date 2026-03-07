@@ -224,6 +224,10 @@ class CostTracker:
                 self._phase_api_cost,
             )
 
+            # Reset mutable state so subsequent record_api_call() invocations
+            # outside a track context start from zero, not stale phase values.
+            self._phase_api_calls = 0
+            self._phase_api_cost = 0.0
             self._active_phase = None
 
     # -- API call counting ---------------------------------------------------
@@ -368,9 +372,9 @@ class CostTracker:
 # -- Cost constants ----------------------------------------------------------
 # These constants come from empirical measurements and vendor pricing.
 
-# SAE training throughput: tokens per second on a single A100-80GB running
-# BF16 TopK SAE training with 8x expansion (dict_size=40960, hidden=5120).
-_SAE_TOKENS_PER_SEC: float = 12_000.0
+# SAE training throughput: tokens per second on a single H200 SXM running
+# BF16 TopK SAE training with 8x expansion (dict_size=16384, hidden=2048).
+_SAE_TOKENS_PER_SEC: float = 25_000.0
 
 # Tokens per SAE (from configs/sae_training.yaml)
 _TOKENS_PER_SAE: int = 200_000_000
@@ -381,15 +385,15 @@ _TOKENS_PER_CONTRASTIVE_PAIR: int = 1024
 # Average tokens per steering trajectory (scenario + up to 5 ReAct turns)
 _TOKENS_PER_TRAJECTORY: int = 1024
 
-# Inference throughput for Qwen 3.5-27B on A100-80GB (tokens/s, BF16)
-_INFERENCE_TOKENS_PER_SEC: float = 50.0
+# Inference throughput for Qwen 3.5-35B-A3B on H200 SXM (tokens/s, BF16, 3B active)
+_INFERENCE_TOKENS_PER_SEC: float = 120.0
 
 # Anthropic Claude Sonnet API pricing (per call, ~1500 input + 200 output tokens)
 # Input: $3/MTok, Output: $15/MTok  =>  ~$0.0075 per call
 _JUDGE_COST_PER_CALL_USD: float = 0.0075
 
-# Approximate A100-80GB on-demand cost (cloud, $/hr)
-_GPU_COST_PER_HOUR_USD: float = 2.21
+# Approximate H200 SXM on-demand cost (cloud, $/hr)
+_GPU_COST_PER_HOUR_USD: float = 3.59
 
 
 def estimate_pipeline_cost(
@@ -398,7 +402,7 @@ def estimate_pipeline_cost(
     n_traits: int = 5,
     n_multipliers: int = 4,
     judge_repeats: int = 3,
-    hardware: str = "NVIDIA A100 80GB",
+    hardware: str = "NVIDIA H200 SXM",
 ) -> PipelineCostSummary:
     """Estimate full pipeline cost without running anything.
 
