@@ -261,7 +261,7 @@ class SteeringExperimentRunner:
 
         candidates: list[tuple[str, float]] = []
         for sae_id, tas in self.all_tas[trait].items():
-            top_features = rank_features(tas, self.top_k_features)
+            top_features = rank_features(tas, self.top_k_features, positive_only=False)
             if not top_features:
                 continue
             mean_abs_tas = sum(abs(t) for _, t in top_features) / len(top_features)
@@ -280,6 +280,33 @@ class SteeringExperimentRunner:
             )
 
         return best_sae_id
+
+    def _build_per_feature_steering(
+        self,
+        tas: torch.Tensor,
+        multiplier: float,
+    ) -> tuple[list[int], torch.Tensor]:
+        """Select top-k features by |TAS| and build per-feature multipliers.
+
+        Positive-TAS features are amplified (multiplier=mult), negative-TAS
+        features are ablated (multiplier=0.0). This ensures both directions
+        of the TAS spectrum contribute to pushing toward HIGH-trait behavior.
+
+        Args:
+            tas: TAS tensor of shape (dict_size,).
+            multiplier: Base steering multiplier for positive-TAS features.
+
+        Returns:
+            (feature_indices, per_feat_mults) — indices and a tensor of
+            per-feature multipliers ready for ``set_steering``.
+        """
+        top_features = rank_features(tas, self.top_k_features, positive_only=False)
+        feature_indices = [idx for idx, _ in top_features]
+        per_feat_mults = torch.tensor([
+            multiplier if tas_val >= 0 else 0.0
+            for _, tas_val in top_features
+        ])
+        return feature_indices, per_feat_mults
 
     def run_experiment_1_standard(
         self,
@@ -309,15 +336,20 @@ class SteeringExperimentRunner:
         sae = self.sae_dict[best_sae_id]
         layer = HOOK_POINTS_BY_ID[best_sae_id].layer
         tas = self.all_tas[trait][best_sae_id]
-        top_features = rank_features(tas, self.top_k_features)
+        top_features = rank_features(tas, self.top_k_features, positive_only=False)
         feature_indices = [idx for idx, _ in top_features]
+        feature_tas_signs = [1.0 if tas_val >= 0 else -1.0 for _, tas_val in top_features]
 
+        n_pos = sum(1 for s in feature_tas_signs if s > 0)
+        n_neg = len(feature_tas_signs) - n_pos
         logger.info(
-            "Experiment 1: %s using %s (layer %d), %d features",
+            "Experiment 1: %s using %s (layer %d), %d features (%d pos, %d neg TAS)",
             trait.value,
             best_sae_id,
             layer,
             len(feature_indices),
+            n_pos,
+            n_neg,
         )
 
         engine = SteeringEngine(self.model, sae, layer)
@@ -329,13 +361,16 @@ class SteeringExperimentRunner:
             for scenario in scenarios:
                 if mult == 0.0:
                     # Multiplier 0.0 = unsteered baseline (no hooks).
-                    # With hooks active, multiplier 0.0 would ABLATE the target
-                    # features (zero them out and subtract their contribution
-                    # from the residual stream), which is a different condition
-                    # than "no intervention."
                     agent_harness.steering_engine = None
                 else:
-                    engine.set_steering(feature_indices, mult)
+                    # Per-feature multipliers: amplify positive-TAS features,
+                    # ablate negative-TAS features (they fire on LOW, so
+                    # removing them pushes toward HIGH behavior).
+                    per_feat_mults = torch.tensor([
+                        mult if sign > 0 else 0.0
+                        for sign in feature_tas_signs
+                    ])
+                    engine.set_steering(feature_indices, per_feat_mults)
                     agent_harness.steering_engine = engine
                 trajectory = agent_harness.run_scenario(scenario)
 
@@ -405,11 +440,12 @@ class SteeringExperimentRunner:
                 if sae_id not in self.sae_dict or sae_id not in self.all_tas.get(trait, {}):
                     continue
                 tas = self.all_tas[trait][sae_id]
-                top_features = rank_features(tas, self.top_k_features)
-                feature_indices = [idx for idx, _ in top_features]
+                feature_indices, per_feat_mults = self._build_per_feature_steering(
+                    tas, multiplier
+                )
                 layer = HOOK_POINTS_BY_ID[sae_id].layer
                 multi_engine.add_layer(
-                    self.sae_dict[sae_id], layer, feature_indices, multiplier
+                    self.sae_dict[sae_id], layer, feature_indices, per_feat_mults
                 )
 
             results = []
@@ -478,11 +514,12 @@ class SteeringExperimentRunner:
                 if sae_id not in self.sae_dict or sae_id not in self.all_tas.get(trait, {}):
                     continue
                 tas = self.all_tas[trait][sae_id]
-                top_features = rank_features(tas, self.top_k_features)
-                feature_indices = [idx for idx, _ in top_features]
+                feature_indices, per_feat_mults = self._build_per_feature_steering(
+                    tas, multiplier
+                )
                 layer = HOOK_POINTS_BY_ID[sae_id].layer
                 multi_engine.add_layer(
-                    self.sae_dict[sae_id], layer, feature_indices, multiplier
+                    self.sae_dict[sae_id], layer, feature_indices, per_feat_mults
                 )
 
             results = []
@@ -518,7 +555,13 @@ class SteeringExperimentRunner:
         n_seeds: int = 1,
     ) -> dict[int, list[SteeringResult]]:
         """Random-feature steering baseline: steer the same number of randomly
-        selected features at the same multiplier.
+        selected features with matched multiplier structure.
+
+        Uses the same per-feature multiplier pattern as Exp 1: the same number
+        of features are amplified (multiplier=mult) vs ablated (multiplier=0.0),
+        matching the pos/neg TAS ratio of the real experiment. This ensures the
+        total steering force is identical between TAS-selected and random features,
+        isolating feature *identity* as the only variable.
 
         If random steering also shifts behavioral scores, TAS-identified features
         are not special. This control is essential for ruling out the alternative
@@ -544,9 +587,15 @@ class SteeringExperimentRunner:
         sae = self.sae_dict[best_sae_id]
         layer = HOOK_POINTS_BY_ID[best_sae_id].layer
 
+        # Compute the pos/neg ratio from the real TAS-selected features
+        # so the random baseline applies the same amplify/ablate split.
+        tas = self.all_tas[trait][best_sae_id]
+        top_features = rank_features(tas, self.top_k_features, positive_only=False)
+        n_amplified = sum(1 for _, tas_val in top_features if tas_val >= 0)
+        n_ablated = len(top_features) - n_amplified
+
         # Filter to active features only: dead features trivialize the
         # comparison because they never fire and thus can't change behavior.
-        tas = self.all_tas[trait][best_sae_id]
         active_mask = tas.abs() > 0
         active_indices = active_mask.nonzero(as_tuple=True)[0].tolist()
 
@@ -565,13 +614,24 @@ class SteeringExperimentRunner:
                 rng = random.Random(current_seed)
                 random_indices = rng.sample(active_indices, self.top_k_features)
 
+            # Match the amplify/ablate split from Exp 1: first n_amplified
+            # features get the multiplier, rest get 0.0 (ablated).
+            # Shuffle ensures which features are amplified vs ablated is random.
+            rng_mult = random.Random(current_seed + 1000)
+            rng_mult.shuffle(random_indices)
+            per_feat_mults = torch.tensor(
+                [multiplier] * n_amplified + [0.0] * n_ablated
+            )
+
             logger.info(
-                "Random baseline for %s (seed=%d): %d random features at layer %d, mult=%.1f",
+                "Random baseline for %s (seed=%d): %d random features at layer %d, "
+                "mult=%.1f (%d amplified, %d ablated — matching Exp 1 ratio)",
                 trait.value, current_seed, len(random_indices), layer, multiplier,
+                n_amplified, n_ablated,
             )
 
             engine = SteeringEngine(self.model, sae, layer)
-            engine.set_steering(random_indices, multiplier)
+            engine.set_steering(random_indices, per_feat_mults)
 
             results = []
             for scenario in scenarios:
@@ -640,8 +700,9 @@ class SteeringExperimentRunner:
         target_layer = HOOK_POINTS_BY_ID[target_sae_id].layer
 
         tas = self.all_tas[trait][source_sae_id]
-        top_features = rank_features(tas, self.top_k_features)
-        feature_indices = [idx for idx, _ in top_features]
+        feature_indices, per_feat_mults = self._build_per_feature_steering(
+            tas, multiplier
+        )
 
         with torch.no_grad():
             # Baseline: capture target layer activations without steering
@@ -658,7 +719,7 @@ class SteeringExperimentRunner:
             # the hook to be a no-op on prefill, producing zero-effect measurements.
             engine = SteeringEngine(self.model, source_sae, source_layer)
             engine.steer_all_positions = True
-            engine.set_steering(feature_indices, multiplier)
+            engine.set_steering(feature_indices, per_feat_mults)
             cache_steered = ActivationCache(self.model, layers=[target_layer])
             with engine.active(), cache_steered.active():
                 self.model(input_ids)
@@ -722,11 +783,12 @@ class SteeringExperimentRunner:
 
             layer = HOOK_POINTS_BY_ID[sae_id].layer
             tas = self.all_tas[trait][sae_id]
-            top_features = rank_features(tas, self.top_k_features)
-            feature_indices = [idx for idx, _ in top_features]
+            feature_indices, per_feat_mults = self._build_per_feature_steering(
+                tas, multiplier
+            )
 
             engine = SteeringEngine(self.model, sae, layer)
-            engine.set_steering(feature_indices, multiplier)
+            engine.set_steering(feature_indices, per_feat_mults)
 
             sae_results: list[SteeringResult] = []
             for scenario in scenarios:
@@ -779,12 +841,13 @@ class SteeringExperimentRunner:
         sae = self.sae_dict[best_sae_id]
         layer = HOOK_POINTS_BY_ID[best_sae_id].layer
         tas = self.all_tas[trait][best_sae_id]
-        top_features = rank_features(tas, self.top_k_features)
-        feature_indices = [idx for idx, _ in top_features]
+        feature_indices, per_feat_mults = self._build_per_feature_steering(
+            tas, multiplier
+        )
 
         agent_harness.steering_engine = None
         engine = SteeringEngine(self.model, sae, layer)
-        engine.set_steering(feature_indices, multiplier)
+        engine.set_steering(feature_indices, per_feat_mults)
 
         logger.info(
             "Generalization test for %s: %d features, mult=%.1f, "
@@ -1126,7 +1189,7 @@ class SteeringExperimentRunner:
         sae = self.sae_dict[best_sae_id]
         layer = HOOK_POINTS_BY_ID[best_sae_id].layer
         tas = self.all_tas[trait][best_sae_id]
-        top_features = rank_features(tas, self.top_k_features)
+        top_features = rank_features(tas, self.top_k_features, positive_only=False)
         feature_indices = [idx for idx, _ in top_features]
         feature_tas = {idx: score for idx, score in top_features}
 

@@ -213,7 +213,7 @@ class SAETrainer:
         # Optional WandB
         self._wandb_run = None
 
-    def init_wandb(self, project: str = "qwen35-scope", run_name: str | None = None) -> None:
+    def init_wandb(self, project: str = "qwenscope", run_name: str | None = None) -> None:
         """Initialize Weights & Biases logging.
 
         Args:

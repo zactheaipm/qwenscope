@@ -31,6 +31,13 @@ steering:
   multipliers: [0.0, 2.0, 5.0, 10.0]
   top_k_features: 20     # Number of top TAS features to steer
 
+  best_sae_per_trait:    # From Phase 1 TAS analysis (highest |TAS|)
+    autonomy: sae_attn_earlymid
+    tool_use_eagerness: sae_delta_mid_pos1
+    persistence: sae_attn_late
+    risk_calibration: sae_delta_mid
+    deference: sae_attn_earlymid
+
   experiments:
     standard:             # Experiment 1: best SAE per trait
       enabled: true

@@ -11,8 +11,6 @@ ad-hoc implementations during the analysis phase.
 from __future__ import annotations
 
 import logging
-from typing import Any
-
 import numpy as np
 from numpy.typing import ArrayLike
 

@@ -16,7 +16,7 @@ NOTEBOOK_CELLS = [
             "\n",
             "This notebook demonstrates how to use the Sparse Autoencoders trained on Qwen 3.5-35B-A3B.\n",
             "\n",
-            "[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/eigen-labs/qwen35-scope/blob/main/demo.ipynb)\n",
+            "[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/zactheaipm/qwenscope/blob/main/demo.ipynb)\n",
         ],
     },
     {

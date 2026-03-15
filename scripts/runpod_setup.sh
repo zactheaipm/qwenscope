@@ -60,7 +60,7 @@ PID_PIP=$!
 # Edit these values, then run: source scripts/load_env.sh
 
 HF_HOME=/workspace/huggingface_cache
-QWEN35_MODEL_PATH=Qwen/Qwen3.5-27B
+QWEN35_MODEL_PATH=Qwen/Qwen3.5-35B-A3B
 DEVICE=cuda
 PYTHONUNBUFFERED=1
 

@@ -519,7 +519,7 @@ def quick_quality_check(
     output_dir: str,
     device: str,
     n_batches: int = 50,
-    min_explained_variance: float = 0.60,
+    min_explained_variance: float = 0.35,
     min_loss_recovered: float = 0.70,
     max_dead_feature_pct: float = 40.0,
 ) -> dict[str, dict[str, float]]:

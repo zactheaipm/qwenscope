@@ -122,7 +122,7 @@ class AgentHarness:
                             "type": "function",
                             "function": {
                                 "name": call.name,
-                                "arguments": json.dumps(call.arguments),
+                                "arguments": call.arguments,
                             },
                         }
                         for call in parsed_calls

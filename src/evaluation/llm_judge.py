@@ -1,4 +1,4 @@
-"""LLM-based behavioral scoring using Claude API.
+"""LLM-based behavioral scoring using DeepSeek V3 API (OpenAI-compatible).
 
 Scores agent trajectories on 15 sub-behaviors (3 per trait) using
 independent rubrics. This decomposition separates empirically distinct
@@ -31,7 +31,9 @@ class JudgeFailureError(Exception):
 
 
 class LLMJudge:
-    """Scores agent trajectories for behavioral traits using Claude API.
+    """Scores agent trajectories for behavioral traits using an OpenAI-compatible API.
+
+    Default: DeepSeek V3 via api.deepseek.com (~12x cheaper than Claude Sonnet).
 
     The judge prompt is carefully designed to measure behavioral dimensions,
     NOT output quality. A "good" trajectory for high-autonomy is one where
@@ -177,24 +179,41 @@ Respond with ONLY a JSON object with this exact structure (no other text):
         "deference": ["instruction_literalness", "challenge_avoidance", "suggestion_restraint"],
     }
 
-    def __init__(self, model: str = "claude-sonnet-4-20250514") -> None:
+    def __init__(
+        self,
+        model: str = "deepseek-chat",
+        api_base: str = "https://api.deepseek.com/v1",
+        api_key_env: str = "DEEPSEEK_API_KEY",
+    ) -> None:
         """Initialize the judge.
 
         Args:
-            model: Claude model to use for evaluation.
+            model: Model name for the OpenAI-compatible API.
+            api_base: Base URL for the API endpoint.
+            api_key_env: Environment variable name for the API key.
         """
         self.model = model
+        self.api_base = api_base
+        self.api_key_env = api_key_env
         self._client = None
-        # Track the exact model version returned by the API for reproducibility.
-        # Anthropic may update weights behind a stable model alias; recording
-        # the version from the response header lets us detect this.
         self.observed_model_versions: set[str] = set()
 
     def _get_client(self) -> Any:
-        """Lazy-init the Anthropic client."""
+        """Lazy-init the OpenAI-compatible client."""
         if self._client is None:
-            import anthropic
-            self._client = anthropic.Anthropic()
+            import os
+            try:
+                from openai import OpenAI
+            except ImportError:
+                raise ImportError(
+                    "openai package required for LLM judge. Install with: pip install openai"
+                )
+            api_key = os.environ.get(self.api_key_env, "")
+            if not api_key:
+                raise RuntimeError(
+                    f"Set {self.api_key_env} environment variable for the LLM judge"
+                )
+            self._client = OpenAI(api_key=api_key, base_url=self.api_base)
         return self._client
 
     def _format_trajectory(self, trajectory: AgentTrajectory) -> str:
@@ -360,24 +379,15 @@ Respond with ONLY a JSON object with this exact structure (no other text):
 
     @staticmethod
     def _is_retryable_error(err: Exception) -> bool:
-        """Check if an API error is transient and worth retrying.
+        """Check if an API error is transient and worth retrying."""
+        try:
+            from openai import APIConnectionError, APIStatusError
+        except ImportError:
+            return False
 
-        Only retries on:
-        - 429 Rate Limit (needs longer backoff)
-        - 500/502/503/529 Server errors (transient)
-        - Connection errors (network issues)
-
-        Does NOT retry on:
-        - 400 Bad Request (malformed input, will fail every time)
-        - 401 Unauthorized (bad API key)
-        - 403 Forbidden (permission issue)
-        - 404 Not Found (wrong endpoint/model)
-        """
-        import anthropic as _anthropic
-
-        if isinstance(err, _anthropic.APIConnectionError):
+        if isinstance(err, APIConnectionError):
             return True
-        if isinstance(err, _anthropic.APIStatusError):
+        if isinstance(err, APIStatusError):
             return err.status_code in (429, 500, 502, 503, 529)
         return False
 
@@ -388,13 +398,6 @@ Respond with ONLY a JSON object with this exact structure (no other text):
         max_retries: int = 3,
     ) -> dict[str, Any]:
         """Make a single judge API call with retry logic for transient errors.
-
-        This handles the retry loop for ONE judge call. Retries are only
-        attempted for transient errors (429, 5xx, connection errors).
-        Non-retryable errors (400, 401, 403) are raised immediately.
-
-        429 Rate Limit errors use longer exponential backoff (starting at 15s)
-        since Anthropic rate windows can be 60s.
 
         Args:
             formatted: The formatted trajectory text.
@@ -407,47 +410,71 @@ Respond with ONLY a JSON object with this exact structure (no other text):
         Raises:
             Exception: If all retries are exhausted or a non-retryable error occurs.
         """
-        import anthropic as _anthropic
+        from openai import APIConnectionError, APIStatusError
 
         client = self._get_client()
         last_err: Exception | None = None
 
         for attempt in range(max_retries):
             try:
-                response = client.messages.create(
+                response = client.chat.completions.create(
                     model=self.model,
                     max_tokens=1024,
                     temperature=0.0,
-                    system=self.JUDGE_SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": formatted}],
+                    messages=[
+                        {"role": "system", "content": self.JUDGE_SYSTEM_PROMPT},
+                        {"role": "user", "content": formatted},
+                    ],
                 )
 
                 # Record the exact model version for reproducibility
                 if hasattr(response, "model") and response.model:
                     self.observed_model_versions.add(response.model)
 
-                response_text = response.content[0].text.strip()
-                return self._extract_json(response_text)
+                response_text = response.choices[0].message.content.strip()
+                parsed = self._extract_json(response_text)
 
-            except (_anthropic.APIStatusError, _anthropic.APIConnectionError) as api_err:
+                # Validate structure — retry on partial responses (e.g. garbled
+                # JSON from transient API issues) instead of discarding later.
+                missing = self._validate_response(parsed)
+                if missing:
+                    last_err = ValueError(
+                        f"Partial response missing keys: {missing}"
+                    )
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            "LLM judge partial response (retry %d/%d) for %s: missing %s",
+                            attempt + 1, max_retries, scenario_id, missing,
+                        )
+                        time.sleep(2 ** (attempt + 1))
+                    continue
+
+                return parsed
+
+            except (APIStatusError, APIConnectionError) as api_err:
                 last_err = api_err
                 if not self._is_retryable_error(api_err):
-                    # Non-retryable (400, 401, 403, 404) — fail immediately
                     raise
 
-                # Retryable error — use appropriate backoff
                 if attempt < max_retries - 1:
-                    if isinstance(api_err, _anthropic.APIStatusError) and api_err.status_code == 429:
-                        # Rate limit: longer backoff (15s, 30s, 60s)
+                    if isinstance(api_err, APIStatusError) and api_err.status_code == 429:
                         wait = 15 * (2 ** attempt)
                     else:
-                        # Server error / connection: standard backoff (2s, 4s, 8s)
                         wait = 2 ** (attempt + 1)
                     logger.warning(
                         "LLM judge API error (retry %d/%d) for %s: %s — retrying in %ds",
                         attempt + 1, max_retries, scenario_id, api_err, wait,
                     )
                     time.sleep(wait)
+
+            except json.JSONDecodeError as json_err:
+                last_err = json_err
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        "LLM judge JSON parse error (retry %d/%d) for %s: %s",
+                        attempt + 1, max_retries, scenario_id, json_err,
+                    )
+                    time.sleep(2 ** (attempt + 1))
 
         raise last_err or RuntimeError("Retry loop exited without error or response")
 

@@ -31,11 +31,8 @@ env/
 .coverage.*
 htmlcov/
 
-# ── Intermediate activations (multi-GB, reproducible — not released) ────────────
-data/activations/
-
-# ── Synthetic data (distributed separately, regenerable via scripts) ───────────
-data/synthetic*/
+# ── Data (SAEs on HuggingFace, results reproducible via pipeline) ─────────────
+data/
 
 # ── Logs ────────────────────────────────────────────────────────────────────────
 *.log
@@ -56,5 +53,16 @@ logs/
 .DS_Store
 Thumbs.db
 
+# ── Generated images ─────────────────────────────────────────────────────────
+*.png
+
+# ── Paper & visualizations ───────────────────────────────────────────────────
+paper/
+viz/
+
+# ── Archives ───────────────────────────────────────────────────────────────────
+*.zip
+
 # ── Notes (local only) ───────────────────────────────────────────────────────
 adaptation.md
+docs/linkedin_post.md

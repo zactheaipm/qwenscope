@@ -1,4 +1,4 @@
-judge_model: "claude-sonnet-4-20250514"
+judge_model: "deepseek-chat"
 max_agent_turns: 5
 temperature: 0.0          # Deterministic generation for reproducibility
 seed: 42

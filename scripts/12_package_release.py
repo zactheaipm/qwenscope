@@ -39,11 +39,11 @@ def main() -> None:
     )
 
     manifest = {
-        "script": "10_package_release",
+        "script": "12_package_release",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "output_dir": str(output_dir),
     }
-    with open(results_dir / "10_release.json", "w") as f:
+    with open(results_dir / "12_release.json", "w") as f:
         json.dump(manifest, f, indent=2)
 
     logger.info("Release package ready at %s", output_dir)

@@ -215,7 +215,7 @@ See the accompanying blog post for full results.
 @misc{{qwen35scope2026,
     title={{Qwen 3.5 Scope: Sparse Autoencoders for Hybrid DeltaNet-Attention Models}},
     year={{2026}},
-    url={{https://huggingface.co/eigen-labs/qwen35-scope}}
+    url={{https://huggingface.co/zactheaipm/qwen35-a3b-saes}}
 }}
 ```
 """

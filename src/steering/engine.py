@@ -102,21 +102,31 @@ class SteeringEngine:
         # Cache the SAE dtype to avoid repeated introspection in the hot path.
         self._sae_dtype = next(sae.parameters()).dtype
 
-    def set_steering(self, feature_indices: list[int], multiplier: float) -> None:
+    def set_steering(
+        self,
+        feature_indices: list[int],
+        multiplier: float | torch.Tensor,
+    ) -> None:
         """Configure which features to steer and by how much.
 
         Args:
             feature_indices: Indices of SAE features to modify.
             multiplier: Factor to multiply target feature activations by.
+                Scalar: same multiplier for all features.
+                Tensor of shape (n_features,): per-feature multipliers.
                 0.0 = ablate features, 1.0 = no change, 5.0 = amplify 5×.
         """
         self._feature_indices = feature_indices
-        self._multiplier = multiplier
+        if isinstance(multiplier, torch.Tensor):
+            sae_device = next(self.sae.parameters()).device
+            self._multiplier = multiplier.to(device=sae_device, dtype=self._sae_dtype)
+        else:
+            self._multiplier = multiplier
         logger.info(
             "Steering configured: %d features at layer %d, multiplier=%.1f",
             len(feature_indices),
             self.layer,
-            multiplier,
+            multiplier if isinstance(multiplier, (int, float)) else multiplier.mean().item(),
         )
 
     @contextmanager
@@ -220,7 +230,7 @@ class MultiLayerSteeringEngine:
         sae: TopKSAE,
         layer: int,
         feature_indices: list[int],
-        multiplier: float,
+        multiplier: float | torch.Tensor,
     ) -> None:
         """Add a steering layer.
 
@@ -228,7 +238,7 @@ class MultiLayerSteeringEngine:
             sae: SAE for this layer.
             layer: Layer index.
             feature_indices: Features to steer.
-            multiplier: Steering multiplier.
+            multiplier: Steering multiplier (scalar or per-feature tensor).
         """
         engine = SteeringEngine(self.model, sae, layer)
         engine.set_steering(feature_indices, multiplier)
@@ -312,6 +322,12 @@ class MeanDiffSteeringEngine:
             self._steering_vector = steering_vector
         self._raw_norm = float(vec_norm.item())
         self._multiplier: float = 1.0
+        # Position mode: "decode" (default), "all", or "prefill"
+        # - "decode": only seq_len==1 (autoregressive decode)
+        # - "all": all positions (prefill + decode)
+        # - "prefill": only seq_len>1 (prefill), skip decode
+        self.steer_all_positions: bool = False
+        self.prefill_only: bool = False
 
     def set_multiplier(self, multiplier: float) -> None:
         """Set the steering multiplier.
@@ -345,7 +361,8 @@ class MeanDiffSteeringEngine:
     ) -> torch.Tensor | tuple[torch.Tensor, ...]:
         """Add the scaled steering vector to the residual stream.
 
-        Only fires during the autoregressive decode phase (seq_len == 1).
+        By default only fires during autoregressive decode (seq_len == 1).
+        When ``steer_all_positions`` is True, also fires during prefill.
 
         Args:
             module: The layer module.
@@ -357,8 +374,16 @@ class MeanDiffSteeringEngine:
         """
         hidden_states = output[0] if isinstance(output, tuple) else output
 
-        # Only steer during autoregressive decode, not prompt prefill.
-        if hidden_states.shape[1] != 1:
+        is_decode = hidden_states.shape[1] == 1
+        is_prefill = not is_decode
+
+        # Position gating:
+        # - Default (decode-only): skip prefill
+        # - steer_all_positions: fire everywhere
+        # - prefill_only: skip decode
+        if self.prefill_only and is_decode:
+            return output
+        if not self.steer_all_positions and not self.prefill_only and is_prefill:
             return output
 
         with torch.no_grad():
